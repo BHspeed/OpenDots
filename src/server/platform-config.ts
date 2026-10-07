@@ -46,6 +46,9 @@ export interface PlatformConfig extends WebConfig {
   browserPage?: () => Promise<{ url: string; title: string } | undefined>;
   runTimeoutMs?: number;
   maxOutputTokens?: number;
+  /** Model context size (OLLAMA_CONTEXT_LENGTH) and tokens kept free for instructions, tools and the answer. */
+  contextTokens?: number;
+  reservedTokens?: number;
 }
 // Local-only: a model identifier is the only requirement. Local servers such
 // as Ollama accept any API key, so a placeholder is used when none is set.

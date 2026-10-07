@@ -54,6 +54,8 @@ const config: PlatformConfig = {
   mcp: new McpTools(loadMcpServers(process.env.MCP_SERVERS_PATH)),
   runTimeoutMs: Number(process.env.RUN_TIMEOUT_MS) || undefined,
   maxOutputTokens: Number(process.env.MAX_OUTPUT_TOKENS) || undefined,
+  contextTokens: Number(process.env.OLLAMA_CONTEXT_LENGTH) || 16384,
+  reservedTokens: Number(process.env.RESERVED_TOKENS) || undefined,
 };
 const platform = new Platform(store, workspace, config, database);
 const researchConfig = {

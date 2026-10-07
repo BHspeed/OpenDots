@@ -62,3 +62,53 @@ export function repairToolArguments(messages: Message[]): Message[] {
     return changed ? ({ ...message, toolCalls } as Message) : message;
   });
 }
+
+/** Rough characters-per-token for budgeting (English text, JSON, code). */
+const charsPerToken = 3.5;
+
+function size(message: Message) {
+  return JSON.stringify(message).length;
+}
+
+/**
+ * Fits the conversation into a character budget so the model always has room
+ * to answer: older tool results are shortened first, then the oldest messages
+ * are dropped. The latest user message and the most recent turn stay intact,
+ * and the kept history never starts with an orphaned tool result.
+ */
+export function fitHistory(
+  messages: Message[],
+  maxChars: number,
+  keepFull = 6,
+): Message[] {
+  const shortened = messages.map((message, index) => {
+    const recent = index >= messages.length - keepFull;
+    if (message.role !== 'tool' || typeof message.content !== 'string')
+      return message;
+    const limit = recent ? 6000 : 600;
+    return message.content.length > limit
+      ? ({
+          ...message,
+          content: `${message.content.slice(0, limit)}\n…[older tool output shortened]`,
+        } as Message)
+      : message;
+  });
+  let total = shortened.reduce((sum, m) => sum + size(m), 0);
+  let start = 0;
+  const lastUser = shortened.map((m) => m.role).lastIndexOf('user');
+  while (total > maxChars && start < lastUser)
+    total -= size(shortened[start++]);
+  // Begin on a user message so tool results never lose their tool call.
+  while (start < shortened.length && shortened[start].role !== 'user') start++;
+  return start >= shortened.length
+    ? shortened.slice(lastUser)
+    : shortened.slice(start);
+}
+
+/** History budget in characters for a model context of `contextTokens`. */
+export function historyBudget(contextTokens: number, reservedTokens: number) {
+  return Math.max(
+    4000,
+    Math.floor((contextTokens - reservedTokens) * charsPerToken),
+  );
+}

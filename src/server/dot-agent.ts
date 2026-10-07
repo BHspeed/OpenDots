@@ -22,7 +22,7 @@ import type { PlatformConfig } from './platform-config.js';
 import { browserResponse } from './research.js';
 import { platformTools } from './platform-tools.js';
 import { allowsTool, toolGroups } from '../shared/capabilities.js';
-import { repairToolArguments } from './tool-args.js';
+import { fitHistory, historyBudget, repairToolArguments } from './tool-args.js';
 const channelError = () => ({
   type: EventType.RUN_ERROR,
   message:
@@ -333,10 +333,19 @@ export class DotAgent extends AbstractAgent {
               const converted = convertInputToTanStackAI({
                 ...ctx.input,
                 // Match BuiltInAgent's default trust boundary for client messages.
-                messages: repairToolArguments(
-                  ctx.input.messages.filter(
-                    (message) =>
-                      message.role !== 'system' && message.role !== 'developer',
+                // Fit the history so the model always has room to answer:
+                // instructions + tool definitions take ~8K of a 16K context.
+                messages: fitHistory(
+                  repairToolArguments(
+                    ctx.input.messages.filter(
+                      (message) =>
+                        message.role !== 'system' &&
+                        message.role !== 'developer',
+                    ),
+                  ),
+                  historyBudget(
+                    this.config.contextTokens ?? 16384,
+                    this.config.reservedTokens ?? 10000,
                   ),
                 ),
               });
