@@ -16,6 +16,7 @@ import {
   ArrowUp,
   Clock3,
   Link2,
+  Paperclip,
   Phone,
   PhoneOff,
   Square,
@@ -89,6 +90,41 @@ export function Chat({
   const [draft, setDraft] = useState('');
   const [source, setSource] = useState('');
   const [sourceOpen, setSourceOpen] = useState(false);
+  const [attachments, setAttachments] = useState<
+    { name: string; path: string }[]
+  >([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  // Attachments are saved on this PC; the Dot opens them with its local tools.
+  const attach = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploading(true);
+    setError('');
+    try {
+      for (const file of [...files]) {
+        if (file.size > 20_000_000)
+          throw new Error(`${file.name} is larger than 20 MB.`);
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1]);
+          reader.onerror = () =>
+            reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        const saved = await api<{ name: string; path: string }>(
+          '/uploads',
+          'POST',
+          { name: file.name, type: file.type || 'text/plain', data },
+        );
+        setAttachments((current) => [...current, saved]);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Attachment failed.');
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  };
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [running, setRunning] = useState(false);
@@ -125,8 +161,14 @@ export function Chat({
       active = false;
     };
   }, [agent, copilotkit, isReady]);
-  const send = async (text: string) => {
+  const send = async (typed: string) => {
+    const text = attachments.length
+      ? `${typed.trim() || 'Please look at the attached file(s).'}\n\nAttached files (open them with your tools):\n${attachments
+          .map((file) => `- ${file.name}: ${file.path}`)
+          .join('\n')}`
+      : typed;
     if (!text.trim() || running || !loaded || !contextReady || paused) return;
+    setAttachments([]);
     setError('');
     setRunning(true);
     agent.addMessage({
@@ -371,6 +413,11 @@ export function Chat({
       />
       <form
         className="chat-composer"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          void attach(e.dataTransfer.files);
+        }}
         onSubmit={(e) => {
           e.preventDefault();
           void send(`${source ? `From ${source}:\n\n` : ''}${draft}`);
@@ -399,7 +446,50 @@ export function Chat({
             </button>
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="attachment-list">
+            {attachments.map((file) => (
+              <span
+                className="attachment-chip"
+                key={file.path}
+                title={file.path}
+              >
+                <Paperclip size={13} />
+                {file.name}
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() =>
+                    setAttachments(
+                      attachments.filter((item) => item.path !== file.path),
+                    )
+                  }
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="chat-compose-row">
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            accept="image/*,.txt,.md,.csv,.json,.pdf"
+            onChange={(e) => void attach(e.target.files)}
+          />
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Attach files"
+            disabled={uploading}
+            onClick={() => fileInput.current?.click()}
+          >
+            <Paperclip size={19} />
+          </button>
           <button
             type="button"
             className="icon-button"
@@ -435,7 +525,13 @@ export function Chat({
             <button
               className="send-button"
               aria-label="Send message"
-              disabled={!draft.trim() || !loaded || !contextReady || paused}
+              disabled={
+                (!draft.trim() && !attachments.length) ||
+                uploading ||
+                !loaded ||
+                !contextReady ||
+                paused
+              }
             >
               <ArrowUp size={19} />
             </button>

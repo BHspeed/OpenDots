@@ -93,6 +93,8 @@ export interface Dot {
   model?: string | null;
   /** Granted tool groups (see shared/capabilities.ts). */
   toolGroups?: string[];
+  /** Reason step by step before answering (slower, better for planning). */
+  thinking?: boolean;
 }
 export interface Conversation {
   id: string;

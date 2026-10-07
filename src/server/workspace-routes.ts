@@ -21,6 +21,7 @@ const dotSchema = z
     spaceIds: z.array(z.string().min(1)).min(1).max(100).optional(),
     spaceId: z.string().min(1).optional(),
     model: z.string().trim().max(120).nullable().optional(),
+    thinking: z.boolean().optional(),
     toolGroups: z
       .array(z.string().regex(/^(mcp:)?[a-z0-9_-]+$/i))
       .max(50)
@@ -116,6 +117,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         data.data.skillDeliveryEnabled,
         data.data.model ?? null,
         data.data.toolGroups ?? defaultToolGroups,
+        data.data.thinking ?? true,
       ),
       201,
     );

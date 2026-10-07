@@ -101,6 +101,7 @@ export class DotAgent extends AbstractAgent {
               current.researchAllowed !== dot.researchAllowed ||
               current.spaceId !== dot.spaceId ||
               current.model !== dot.model ||
+              current.thinking !== dot.thinking ||
               JSON.stringify(current.toolGroups) !==
                 JSON.stringify(dot.toolGroups) ||
               JSON.stringify(current.spaceIds) !== JSON.stringify(dot.spaceIds)
@@ -319,6 +320,10 @@ export class DotAgent extends AbstractAgent {
                 runId: ctx.input.runId,
                 modelOptions: {
                   max_completion_tokens: this.config.maxOutputTokens ?? 8192,
+                  // Ollama maps "none" to think=false for hybrid reasoning models.
+                  ...(dot.thinking === false
+                    ? { reasoning_effort: 'none' }
+                    : {}),
                 },
                 agentLoopStrategy: maxIterations(10),
                 tools: [

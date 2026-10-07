@@ -83,6 +83,11 @@ def safe_path(path: str) -> Path:
     return resolved
 
 
+def positive(value: Any, default: Any) -> Any:
+    """Models often fill optional numbers with 0 or empty values; use the default."""
+    return value if isinstance(value, (int, float)) and value > 0 else default
+
+
 def describe_entry(path: Path) -> dict[str, Any]:
     stat = path.stat()
     return {
@@ -100,7 +105,9 @@ def describe_entry(path: Path) -> dict[str, Any]:
 @mcp.tool()
 def list_directory(path: str = "~", pattern: str = "*", limit: int = 200) -> dict:
     """List files and folders in a directory, optionally filtered by a glob pattern like '*.png'."""
-    folder = safe_path(path)
+    folder = safe_path(path or "~")
+    pattern = pattern or "*"
+    limit = positive(limit, 200)
     entries = [
         describe_entry(p)
         for p in sorted(folder.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
@@ -113,6 +120,8 @@ def list_directory(path: str = "~", pattern: str = "*", limit: int = 200) -> dic
 def find_files(root: str, pattern: str = "*", contains: str = "", limit: int = 100) -> dict:
     """Recursively search under root for files whose name matches a glob pattern, optionally containing text."""
     base = safe_path(root)
+    pattern = pattern or "*"
+    limit = positive(limit, 100)
     matches: list[dict] = []
     skip = {".git", "node_modules", ".venv", "__pycache__", "AppData"}
     for dirpath, dirnames, filenames in os.walk(base):
@@ -140,7 +149,7 @@ def read_text_file(path: str, max_chars: int = 20_000) -> dict:
     """Read a text file (code, notes, logs, csv, json...)."""
     file = safe_path(path)
     text = file.read_text(encoding="utf-8", errors="replace")
-    limit = min(max_chars, MAX_READ)
+    limit = min(positive(max_chars, 20_000), MAX_READ)
     return {"path": str(file), "truncated": len(text) > limit, "text": text[:limit]}
 
 
@@ -239,7 +248,7 @@ def _save(image, prefix: str) -> str:
 @mcp.tool()
 def take_screenshot(monitor: int = 1) -> dict:
     """Capture the screen to a PNG file. Returns its path and size (use describe_image or detect_objects on it)."""
-    image = _screenshot(monitor)
+    image = _screenshot(positive(monitor, 1))
     return {"path": _save(image, "screen"), "width": image.width, "height": image.height}
 
 
@@ -247,7 +256,8 @@ def take_screenshot(monitor: int = 1) -> dict:
 def describe_image(path: str, question: str = "Describe this image in detail.") -> dict:
     """Understand an image with the local vision model: describe it, read its text (OCR), answer questions.
     path can be an image file or 'screen' for the current screen."""
-    image = _load_image(path)
+    question = question or "Describe this image in detail."
+    image = _load_image(path or "screen")
     image.thumbnail((1600, 1600))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -284,8 +294,8 @@ def detect_objects(path: str = "screen", confidence: float = 0.35, save_annotate
         settings.update({"sync": False})
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         _yolo = YOLO(str(Path(__file__).parent / YOLO_MODEL) if (Path(__file__).parent / YOLO_MODEL).exists() else YOLO_MODEL)
-    image = _load_image(path)
-    result = _yolo.predict(image, conf=confidence, verbose=False)[0]
+    image = _load_image(path or "screen")
+    result = _yolo.predict(image, conf=positive(confidence, 0.35), verbose=False)[0]
     objects = [
         {
             "label": result.names[int(box.cls)],
@@ -312,7 +322,7 @@ def web_search(query: str, max_results: int = 6) -> dict:
 
     # DuckDuckGo only: ddgs otherwise fans out to several search engines.
     results = DDGS(timeout=20).text(
-        query, max_results=max(1, min(max_results, 10)), backend="duckduckgo"
+        query, max_results=min(positive(max_results, 6), 10), backend="duckduckgo"
     )
     return {
         "query": query,
@@ -346,7 +356,7 @@ def fetch_page(url: str, max_chars: int = 12_000) -> dict:
     return {
         "url": str(response.url),
         "title": unescape(title.group(1).strip()) if title else "",
-        "text": text[: min(max_chars, 50_000)],
+        "text": text[: min(positive(max_chars, 12_000), 50_000)],
     }
 
 

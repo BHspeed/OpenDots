@@ -5,6 +5,7 @@
 export const starterTeam = [
   {
     name: 'Planner',
+    thinking: true,
     model: '@planner',
     toolGroups: ['delegation', 'memory'],
     instructions:
@@ -12,6 +13,7 @@ export const starterTeam = [
   },
   {
     name: 'Files',
+    thinking: false,
     model: '@default',
     toolGroups: ['files', 'memory'],
     instructions:
@@ -19,6 +21,7 @@ export const starterTeam = [
   },
   {
     name: 'Vision',
+    thinking: false,
     model: '@vision',
     toolGroups: ['vision', 'detection'],
     instructions:
@@ -26,6 +29,7 @@ export const starterTeam = [
   },
   {
     name: 'Operator',
+    thinking: true,
     model: '@default',
     toolGroups: ['pc_control', 'vision'],
     instructions:
@@ -33,6 +37,7 @@ export const starterTeam = [
   },
   {
     name: 'Researcher',
+    thinking: false,
     model: '@default',
     toolGroups: ['web', 'memory'],
     instructions:

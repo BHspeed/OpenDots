@@ -3993,3 +3993,28 @@ h3 {
   font-size: 14px;
   color: #c9e8dd;
 }
+
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px 0;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 260px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.weekday-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}

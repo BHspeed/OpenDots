@@ -31,6 +31,7 @@ export class WorkspaceStore {
       ['dots', 'skillDeliveryEnabled', 'INTEGER NOT NULL DEFAULT 0'],
       ['thread_bindings', 'learningContainerId', 'TEXT'],
       ['dots', 'model', 'TEXT'],
+      ['dots', 'thinking', 'INTEGER NOT NULL DEFAULT 1'],
       [
         'dots',
         'toolGroups',
@@ -119,8 +120,20 @@ export class WorkspaceStore {
       instructions: string;
       model: string | null;
       toolGroups: string[];
+      thinking: boolean;
     }[],
   ) {
+    if (!this.setting('teamThinking')) {
+      // Seeded before the thinking switch existed: apply the team defaults once.
+      for (const dot of team) {
+        const existing = this.dots().find((d) => d.name === dot.name);
+        if (existing)
+          this.db
+            .prepare('UPDATE dots SET thinking=? WHERE id=?')
+            .run(+dot.thinking, existing.id);
+      }
+      this.setSetting('teamThinking', '1');
+    }
     if (this.setting('teamSeeded')) return;
     const space = this.spaces()[0];
     for (const dot of team)
@@ -136,6 +149,7 @@ export class WorkspaceStore {
           false,
           dot.model,
           dot.toolGroups,
+          dot.thinking,
         );
     this.setSetting('teamSeeded', '1');
   }
@@ -172,6 +186,7 @@ export class WorkspaceStore {
         memoryAllowed: !!row.memoryAllowed,
         skillDeliveryEnabled: !!row.skillDeliveryEnabled,
         model: row.model ?? null,
+        thinking: row.thinking === undefined ? true : !!row.thinking,
         toolGroups: JSON.parse(String(row.toolGroups ?? '[]')) as string[],
       })) as unknown as Dot[];
   }
@@ -189,6 +204,7 @@ export class WorkspaceStore {
     skillDeliveryEnabled = false,
     model: string | null = null,
     toolGroups: string[] = legacyToolGroups,
+    thinking = true,
   ): Dot {
     this.validateSpaceAccess(spaceId, spaceIds);
     validateLearningSettings(learningContainerId, skillDeliveryEnabled);
@@ -204,13 +220,14 @@ export class WorkspaceStore {
       skillDeliveryEnabled,
       model,
       toolGroups: [...new Set(toolGroups)],
+      thinking,
       createdAt: Date.now(),
     };
     this.db.exec('BEGIN');
     try {
       this.db
         .prepare(
-          'INSERT INTO dots (id, spaceId, name, instructions, researchAllowed, memoryAllowed, createdAt, learningContainerId, skillDeliveryEnabled, model, toolGroups) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO dots (id, spaceId, name, instructions, researchAllowed, memoryAllowed, createdAt, learningContainerId, skillDeliveryEnabled, model, toolGroups, thinking) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         )
         .run(
           dot.id,
@@ -224,6 +241,7 @@ export class WorkspaceStore {
           +skillDeliveryEnabled,
           model,
           JSON.stringify(dot.toolGroups),
+          +thinking,
         );
       for (const id of dot.spaceIds)
         this.db.prepare('INSERT INTO dot_spaces VALUES (?, ?)').run(dot.id, id);
@@ -258,6 +276,7 @@ export class WorkspaceStore {
       skillDeliveryEnabled?: boolean;
       model?: string | null;
       toolGroups?: string[];
+      thinking?: boolean;
     },
   ): Dot {
     const current = this.dot(id);
@@ -288,13 +307,16 @@ export class WorkspaceStore {
           id,
         );
       this.db
-        .prepare('UPDATE dots SET spaceId=?, model=?, toolGroups=? WHERE id=?')
+        .prepare(
+          'UPDATE dots SET spaceId=?, model=?, toolGroups=?, thinking=? WHERE id=?',
+        )
         .run(
           defaultSpace,
           patch.model === undefined ? (current.model ?? null) : patch.model,
           JSON.stringify([
             ...new Set(patch.toolGroups ?? current.toolGroups ?? []),
           ]),
+          +(patch.thinking ?? current.thinking ?? true),
           id,
         );
       this.db.prepare('DELETE FROM dot_spaces WHERE dotId=?').run(id);
