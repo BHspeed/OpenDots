@@ -47,7 +47,8 @@ SNAPSHOT_JS = r"""
   window.__ldNext = window.__ldNext || 1;
   const sel = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],' +
     '[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=switch],[role=combobox],' +
-    '[role=searchbox],[role=textbox],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"])';
+    '[role=searchbox],[role=textbox],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"]),' +
+    '[role=row],[role=gridcell],[role=listitem],[role=treeitem],[jsaction*="click"],[data-action]';
   const visible = e => { const r = e.getBoundingClientRect(); if (r.width <= 1 || r.height <= 1) return false;
     if (r.bottom <= 0 || r.top >= innerHeight * 3) return false;
     const s = getComputedStyle(e); return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0'; };
@@ -126,6 +127,79 @@ def launch_chrome(url: str = "about:blank", debug: bool = True) -> subprocess.Po
     if debug:
         args.append(f"--remote-debugging-port={CDP_PORT}")
     return subprocess.Popen(args + [url])
+
+
+# Boxes of in-view marked elements (CSS pixels) for drawing numbered marks.
+MARKS_JS = r"""
+() => [...document.querySelectorAll('[data-ld-ref]')].flatMap(e => {
+  const r = e.getBoundingClientRect();
+  if (r.width < 4 || r.height < 4 || r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth) return [];
+  return [{ ref: Number(e.getAttribute('data-ld-ref')), x: r.left, y: r.top, w: r.width, h: r.height }];
+})
+"""
+# A visible cursor that glides to each click, so the owner sees the AI's mouse.
+CURSOR_JS = r"""
+([x, y]) => {
+  let c = document.getElementById('__ld_cursor');
+  if (!c) {
+    c = document.createElement('div'); c.id = '__ld_cursor';
+    c.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;width:22px;height:22px;' +
+      'margin:-11px 0 0 -11px;border-radius:50%;background:rgba(255,90,54,.35);border:3px solid #ff5a36;' +
+      'box-shadow:0 0 0 4px rgba(255,255,255,.7);transition:left .35s ease,top .35s ease;left:50%;top:50%';
+    document.documentElement.appendChild(c);
+  }
+  c.style.left = x + 'px'; c.style.top = y + 'px';
+}
+"""
+# What is at a point (for clicks chosen on the grid).
+POINT_JS = r"""
+([x, y]) => { const e = document.elementFromPoint(x, y); if (!e) return null;
+  const t = e.closest('a,button,[role],input,textarea,select,[onclick],[jsaction]') || e;
+  return { tag: t.tagName.toLowerCase(), role: t.getAttribute('role') || '', type: t.getAttribute('type') || '',
+    name: (t.getAttribute('aria-label') || t.innerText || t.value || t.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 80) }; }
+"""
+GRID_COLS, GRID_ROWS = 12, 8
+
+
+def draw_marks(image, marks, scale):
+    """Numbered boxes over each clickable element (high contrast labels)."""
+    from PIL import ImageDraw, ImageFont
+
+    image = image.convert("RGB")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("arialbd.ttf", max(12, int(13 * scale)))
+    except OSError:
+        font = ImageFont.load_default()
+    for m in marks:
+        x0, y0 = m["x"] * scale, m["y"] * scale
+        x1, y1 = x0 + m["w"] * scale, y0 + m["h"] * scale
+        draw.rectangle([x0, y0, x1, y1], outline=(255, 40, 40), width=2)
+        label = str(m["ref"])
+        tw, th = draw.textbbox((0, 0), label, font=font)[2:]
+        draw.rectangle([x0, y0, x0 + tw + 6, y0 + th + 4], fill=(255, 40, 40))
+        draw.text((x0 + 3, y0 + 1), label, fill=(255, 255, 255), font=font)
+    return image
+
+
+def draw_grid(image):
+    """Lettered grid (A1..L8) for clicking things without a box."""
+    from PIL import ImageDraw, ImageFont
+
+    image = image.convert("RGB")
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    cw, ch = width / GRID_COLS, height / GRID_ROWS
+    try:
+        font = ImageFont.truetype("arialbd.ttf", 16)
+    except OSError:
+        font = ImageFont.load_default()
+    for c in range(GRID_COLS):
+        for r in range(GRID_ROWS):
+            x0, y0 = c * cw, r * ch
+            draw.rectangle([x0, y0, x0 + cw, y0 + ch], outline=(0, 120, 255), width=1)
+            draw.text((x0 + 4, y0 + 3), f"{chr(65 + c)}{r + 1}", fill=(0, 90, 220), font=font)
+    return image
 
 
 class Browser:
@@ -228,7 +302,12 @@ class Browser:
         await asyncio.sleep(0.6)
 
 
-def register(tool: Callable, confirm: Callable[[str], None], save_image: Callable[[Any, str], str]) -> None:
+def register(
+    tool: Callable,
+    confirm: Callable[[str], None],
+    save_image: Callable[[Any, str], str],
+    vision: Callable[..., str] | None = None,
+) -> None:
     browser = Browser()
 
     async def ask(action: str) -> None:
@@ -271,6 +350,122 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
         """Re-read the current page: URL, title, visible text and numbered interactive elements [ref]."""
         async with browser.lock:
             return await browser.snapshot(max_chars=max_chars if max_chars > 0 else 5000)
+
+    async def look(target: str):
+        """Screenshot with numbered marks; the vision model picks the target."""
+        from PIL import Image
+        import io
+
+        page = await browser.page()
+        await browser.snapshot(max_chars=0, max_elements=250)
+        marks = await page.evaluate(MARKS_JS)
+        shot = Image.open(io.BytesIO(await page.screenshot()))
+        viewport = await page.evaluate("() => [innerWidth, innerHeight]")
+        scale = shot.width / max(1, viewport[0])
+        marked = draw_marks(shot, marks, scale)
+        path = save_image(marked, "marked")
+        answer = await asyncio.to_thread(
+            vision,
+            marked,
+            "This is a screenshot of a web page. Red numbered boxes mark clickable things. "
+            f"Which box is: {target}? Reply with only the box number, or 0 if no box fits.",
+            False,
+        )
+        number = int(re.search(r"\d+", answer).group()) if re.search(r"\d+", answer) else 0
+        known = {m["ref"]: m for m in marks}
+        if number in known:
+            m = known[number]
+            return {"ref": number, "x": m["x"] + m["w"] / 2, "y": m["y"] + m["h"] / 2, "image": path}
+        # Fallback: a lettered grid for things without a box.
+        gridded = draw_grid(shot)
+        cell = await asyncio.to_thread(
+            vision,
+            gridded,
+            "This is a screenshot of a web page with a blue lettered grid. "
+            f"Which grid cell contains: {target}? Reply with only the cell label like C4, or NONE.",
+            False,
+        )
+        found = re.search(r"\b([A-L])\s*([1-8])\b", cell.upper())
+        if not found:
+            raise LookupError(f"Could not find '{target}' on the screen. Try describing it differently or scroll.")
+        col, row = ord(found.group(1)) - 65, int(found.group(2)) - 1
+        return {
+            "ref": None,
+            "x": (col + 0.5) * viewport[0] / GRID_COLS,
+            "y": (row + 0.5) * viewport[1] / GRID_ROWS,
+            "image": save_image(gridded, "grid"),
+            "cell": found.group(1) + found.group(2),
+        }
+
+    async def mouse_to(x: float, y: float):
+        page = await browser.page()
+        await page.evaluate(CURSOR_JS, [x, y])
+        await page.mouse.move(x, y, steps=12)
+        await asyncio.sleep(0.4)
+
+    @tool()
+    async def browser_visual_click(target: str) -> dict:
+        """Look at the page and click something described in plain words, like a person with a mouse:
+        e.g. 'the first email in the inbox', 'the blue Sign up button', 'the search icon'.
+        Use this when browser_find cannot locate it or the page is a complex web app."""
+        ensure_control()
+        if vision is None:
+            raise RuntimeError("No vision model is configured for look-and-click.")
+        async with browser.lock:
+            spot = await look(target)
+            page = await browser.page()
+            info = (
+                (await browser.element(spot["ref"]))[0]
+                if spot["ref"] is not None
+                else (await page.evaluate(POINT_JS, [spot["x"], spot["y"]]) or {"tag": "", "role": "", "name": ""})
+            )
+        name = info.get("name") or ""
+        is_link = info.get("tag") == "a" or info.get("role") == "link"
+        if not is_link and RISKY.search(name):
+            await ask(f"Click \"{name or target}\" on {page.url}")
+
+        async def work():
+            await mouse_to(spot["x"], spot["y"])
+            await page.mouse.click(spot["x"], spot["y"])
+            where = f"[{spot['ref']}]" if spot["ref"] is not None else f"grid {spot.get('cell')}"
+            return {"clicked": f"{where} {name or target}", "looked_at": spot["image"]}
+
+        return await act(work)
+
+    @tool()
+    async def browser_visual_type(target: str, text: str, submit: bool = False) -> dict:
+        """Look at the page, click the field described in plain words (e.g. 'the To field', 'the search bar'),
+        and type text into it like a keyboard. submit=true presses Enter after."""
+        ensure_control()
+        if vision is None:
+            raise RuntimeError("No vision model is configured for look-and-click.")
+        async with browser.lock:
+            spot = await look(target)
+            page = await browser.page()
+            info = (
+                (await browser.element(spot["ref"]))[0]
+                if spot["ref"] is not None
+                else (await page.evaluate(POINT_JS, [spot["x"], spot["y"]]) or {"type": "", "role": "", "name": ""})
+            )
+        name = info.get("name") or target
+        is_search = info.get("type") == "search" or info.get("role") in ("searchbox", "combobox") or re.search(
+            r"search|query|find", name, re.I
+        )
+        if info.get("type") == "password":
+            await ask(f"Type a password into \"{name}\" on {page.url}")
+        elif not is_search:
+            shown = text if len(text) <= 120 else text[:120] + "..."
+            await ask(f"Type into \"{name}\"{' and press Enter' if submit else ''}:\n\"{shown}\"")
+
+        async def work():
+            await mouse_to(spot["x"], spot["y"])
+            await page.mouse.click(spot["x"], spot["y"])
+            await page.keyboard.type(text, delay=15)
+            if submit:
+                await page.keyboard.press("Enter")
+            return {"typed_into": name, "looked_at": spot["image"]}
+
+        return await act(work)
 
     @tool()
     async def browser_find(text: str, max_results: int = 10) -> dict:

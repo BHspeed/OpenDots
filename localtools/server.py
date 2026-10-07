@@ -294,12 +294,10 @@ def take_screenshot(monitor: int = 1) -> dict:
 
 
 @tool()
-def describe_image(path: str, question: str = "Describe this image in detail.") -> dict:
-    """Understand an image with the local vision model: describe it, read its text (OCR), answer questions.
-    path can be an image file or 'screen' for the current screen."""
-    question = question or "Describe this image in detail."
-    image = _load_image(path or "screen")
-    image.thumbnail((1600, 1600))
+def ask_vision(image, question: str, think: bool = True, max_side: int = 1600) -> str:
+    """Ask the local vision model a question about a PIL image."""
+    image = image.copy()
+    image.thumbnail((max_side, max_side))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     response = httpx.post(
@@ -307,6 +305,8 @@ def describe_image(path: str, question: str = "Describe this image in detail.") 
         json={
             "model": VISION_MODEL,
             "stream": False,
+            "think": think,
+            "options": {"temperature": 0},
             "messages": [
                 {
                     "role": "user",
@@ -318,7 +318,16 @@ def describe_image(path: str, question: str = "Describe this image in detail.") 
         timeout=300,
     )
     response.raise_for_status()
-    return {"model": VISION_MODEL, "answer": response.json()["message"]["content"]}
+    return response.json()["message"]["content"]
+
+
+@tool()
+def describe_image(path: str, question: str = "Describe this image in detail.") -> dict:
+    """Understand an image with the local vision model: describe it, read its text (OCR), answer questions.
+    path can be an image file or 'screen' for the current screen."""
+    question = question or "Describe this image in detail."
+    answer = ask_vision(_load_image(path or "screen"), question)
+    return {"model": VISION_MODEL, "answer": answer}
 
 
 _yolo = None
@@ -638,7 +647,7 @@ def system_info() -> dict:
 
 import browser  # noqa: E402  (registers the browser_* tools)
 
-browser.register(tool, confirm, _save)
+browser.register(tool, confirm, _save, ask_vision)
 
 
 if __name__ == "__main__":
