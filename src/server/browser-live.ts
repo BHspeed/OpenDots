@@ -17,6 +17,7 @@ export interface LiveFrame {
 
 export class LiveBrowser {
   private browser?: Browser;
+  private active?: Page;
   private connecting?: Promise<Browser | undefined>;
   readonly takeoverFile: string;
   constructor(
@@ -43,6 +44,22 @@ export class LiveBrowser {
       .then((browser) => {
         this.browser = browser;
         browser.on('disconnected', () => (this.browser = undefined));
+        // Follow whichever tab most recently navigated or was opened.
+        const track = (page: Page) => {
+          page.on('framenavigated', (frame) => {
+            if (frame === page.mainFrame()) this.active = page;
+          });
+          page.on('close', () => {
+            if (this.active === page) this.active = undefined;
+          });
+        };
+        for (const context of browser.contexts()) {
+          context.pages().forEach(track);
+          context.on('page', (page) => {
+            track(page);
+            this.active = page;
+          });
+        }
         return browser;
       })
       .catch(() => undefined)
@@ -58,12 +75,19 @@ export class LiveBrowser {
     if (!(await this.connect()))
       throw new Error('The browser started but its live view is unavailable.');
   }
-  /** The tab the agent or owner is looking at (visible, else most recent). */
+  /** The tab being worked on: last navigated, else a visible non-blank tab. */
   async page(): Promise<Page | undefined> {
     const browser = await this.connect();
     if (!browser) return undefined;
-    const pages = browser.contexts().flatMap((context) => context.pages());
-    for (const page of pages.toReversed()) {
+    if (this.active && !this.active.isClosed()) return this.active;
+    const pages = browser
+      .contexts()
+      .flatMap((context) => context.pages())
+      .sort(
+        (a, b) =>
+          Number(b.url() !== 'about:blank') - Number(a.url() !== 'about:blank'),
+      );
+    for (const page of pages) {
       try {
         if ((await page.evaluate(() => document.visibilityState)) === 'visible')
           return page;
@@ -71,7 +95,7 @@ export class LiveBrowser {
         // Page navigating or closed; try the next one.
       }
     }
-    return pages.at(-1);
+    return pages[0];
   }
   async status() {
     const page = await this.page();

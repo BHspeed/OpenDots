@@ -179,7 +179,8 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
 
         async def work():
             page = await browser.page()
-            if new_tab:
+            # Reuse a blank tab instead of leaving it behind.
+            if new_tab and page.url != "about:blank":
                 page = await browser._context.new_page()
                 browser._page = page
             await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
