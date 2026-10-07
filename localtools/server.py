@@ -26,8 +26,13 @@ from typing import Any
 # Keep Ultralytics fully offline: no analytics sync or update checks.
 os.environ.setdefault("YOLO_OFFLINE", "1")
 
+import functools
+import json
+import subprocess
+
 import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 HOME = Path.home()
 ROOTS = [
@@ -53,6 +58,28 @@ mcp = MCPServer(
         "the same action without asking. Paths are limited to allowed roots."
     ),
 )
+
+
+def tool():
+    """Register a tool whose failures reach the model as readable messages.
+
+    The MCP SDK hides unexpected exceptions behind "Error executing tool", which
+    leaves the model guessing; re-raise them as ToolError with the real reason.
+    """
+
+    def register(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except ToolError:
+                raise
+            except Exception as error:
+                raise ToolError(f"{type(error).__name__}: {error}") from error
+
+        return mcp.tool()(wrapper)
+
+    return register
 
 
 # ---------------------------------------------------------------- safety
@@ -102,7 +129,7 @@ def describe_entry(path: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------- files
 
 
-@mcp.tool()
+@tool()
 def list_directory(path: str = "~", pattern: str = "*", limit: int = 200) -> dict:
     """List files and folders in a directory, optionally filtered by a glob pattern like '*.png'."""
     folder = safe_path(path or "~")
@@ -116,7 +143,7 @@ def list_directory(path: str = "~", pattern: str = "*", limit: int = 200) -> dic
     return {"path": str(folder), "count": len(entries), "entries": entries[:limit]}
 
 
-@mcp.tool()
+@tool()
 def find_files(root: str, pattern: str = "*", contains: str = "", limit: int = 100) -> dict:
     """Recursively search under root for files whose name matches a glob pattern, optionally containing text."""
     base = safe_path(root)
@@ -144,7 +171,7 @@ def find_files(root: str, pattern: str = "*", contains: str = "", limit: int = 1
     return {"truncated": False, "matches": matches}
 
 
-@mcp.tool()
+@tool()
 def read_text_file(path: str, max_chars: int = 20_000) -> dict:
     """Read a text file (code, notes, logs, csv, json...)."""
     file = safe_path(path)
@@ -153,7 +180,7 @@ def read_text_file(path: str, max_chars: int = 20_000) -> dict:
     return {"path": str(file), "truncated": len(text) > limit, "text": text[:limit]}
 
 
-@mcp.tool()
+@tool()
 def write_text_file(path: str, content: str, overwrite: bool = False) -> dict:
     """Create a text file. Overwriting an existing file asks the owner first."""
     file = safe_path(path)
@@ -166,7 +193,7 @@ def write_text_file(path: str, content: str, overwrite: bool = False) -> dict:
     return {"written": str(file), "chars": len(content)}
 
 
-@mcp.tool()
+@tool()
 def make_directory(path: str) -> dict:
     """Create a folder (and any missing parents)."""
     folder = safe_path(path)
@@ -174,7 +201,7 @@ def make_directory(path: str) -> dict:
     return {"created": str(folder)}
 
 
-@mcp.tool()
+@tool()
 def copy_path(source: str, destination: str) -> dict:
     """Copy a file or folder. Never overwrites an existing destination."""
     src, dst = safe_path(source), safe_path(destination)
@@ -188,7 +215,7 @@ def copy_path(source: str, destination: str) -> dict:
     return {"copied": str(src), "to": str(dst)}
 
 
-@mcp.tool()
+@tool()
 def move_paths(moves: list[dict[str, str]]) -> dict:
     """Move or rename files/folders. moves = [{"source": ..., "destination": ...}]. Asks the owner once for the whole batch."""
     pairs = [(safe_path(m["source"]), safe_path(m["destination"])) for m in moves]
@@ -206,7 +233,7 @@ def move_paths(moves: list[dict[str, str]]) -> dict:
     return {"moved": len(pairs)}
 
 
-@mcp.tool()
+@tool()
 def delete_to_recycle_bin(paths: list[str]) -> dict:
     """Send files/folders to the Recycle Bin (recoverable). Asks the owner first."""
     from send2trash import send2trash
@@ -245,14 +272,14 @@ def _save(image, prefix: str) -> str:
     return str(out)
 
 
-@mcp.tool()
+@tool()
 def take_screenshot(monitor: int = 1) -> dict:
     """Capture the screen to a PNG file. Returns its path and size (use describe_image or detect_objects on it)."""
     image = _screenshot(positive(monitor, 1))
     return {"path": _save(image, "screen"), "width": image.width, "height": image.height}
 
 
-@mcp.tool()
+@tool()
 def describe_image(path: str, question: str = "Describe this image in detail.") -> dict:
     """Understand an image with the local vision model: describe it, read its text (OCR), answer questions.
     path can be an image file or 'screen' for the current screen."""
@@ -283,7 +310,7 @@ def describe_image(path: str, question: str = "Describe this image in detail.") 
 _yolo = None
 
 
-@mcp.tool()
+@tool()
 def detect_objects(path: str = "screen", confidence: float = 0.35, save_annotated: bool = True) -> dict:
     """Detect and locate objects (people, cars, cups, laptops... 80 COCO classes) with YOLO on the GPU.
     path can be an image file or 'screen'. Returns labels, confidence and pixel boxes."""
@@ -315,7 +342,7 @@ def detect_objects(path: str = "screen", confidence: float = 0.35, save_annotate
 # ---------------------------------------------------------------- web (opt-in)
 
 
-@mcp.tool()
+@tool()
 def web_search(query: str, max_results: int = 6) -> dict:
     """Search the public web with DuckDuckGo. The query is sent to DuckDuckGo; nothing else leaves the PC."""
     from ddgs import DDGS
@@ -333,7 +360,7 @@ def web_search(query: str, max_results: int = 6) -> dict:
     }
 
 
-@mcp.tool()
+@tool()
 def fetch_page(url: str, max_chars: int = 12_000) -> dict:
     """Read a public web page and return its main text."""
     import re
@@ -363,7 +390,7 @@ def fetch_page(url: str, max_chars: int = 12_000) -> dict:
 # ---------------------------------------------------------------- PC control
 
 
-@mcp.tool()
+@tool()
 def list_windows() -> dict:
     """List visible top-level windows with their titles and positions."""
     import pygetwindow as gw
@@ -377,7 +404,7 @@ def list_windows() -> dict:
     }
 
 
-@mcp.tool()
+@tool()
 def focus_window(title_contains: str) -> dict:
     """Bring the first window whose title contains the text to the front."""
     import pygetwindow as gw
@@ -392,7 +419,7 @@ def focus_window(title_contains: str) -> dict:
     return {"focused": window.title}
 
 
-@mcp.tool()
+@tool()
 def mouse_click(x: int, y: int, button: str = "left", clicks: int = 1) -> dict:
     """Click at screen pixel (x, y). Take a screenshot first to find coordinates. Asks the owner first."""
     import pyautogui
@@ -402,7 +429,7 @@ def mouse_click(x: int, y: int, button: str = "left", clicks: int = 1) -> dict:
     return {"clicked": [x, y], "button": button, "clicks": clicks}
 
 
-@mcp.tool()
+@tool()
 def type_text(text: str) -> dict:
     """Type text into the focused window. Asks the owner first."""
     import pyautogui
@@ -421,7 +448,7 @@ def _paste(text: str) -> None:
     pyautogui.hotkey("ctrl", "v")
 
 
-@mcp.tool()
+@tool()
 def press_keys(keys: list[str]) -> dict:
     """Press a key or shortcut together, e.g. ["ctrl","s"], ["alt","tab"], ["enter"]. Asks the owner first."""
     import pyautogui
@@ -431,7 +458,7 @@ def press_keys(keys: list[str]) -> dict:
     return {"pressed": keys}
 
 
-@mcp.tool()
+@tool()
 def scroll(amount: int, x: int | None = None, y: int | None = None) -> dict:
     """Scroll the mouse wheel; positive = up, negative = down (about 120 per notch)."""
     import pyautogui
@@ -440,9 +467,119 @@ def scroll(amount: int, x: int | None = None, y: int | None = None) -> dict:
     return {"scrolled": amount}
 
 
-@mcp.tool()
+_apps_cache: tuple[float, list[dict]] = (0.0, [])
+
+
+def _start_apps() -> list[dict]:
+    """Installed apps from the Start menu (desktop and Store apps), cached."""
+    global _apps_cache
+    if time.time() - _apps_cache[0] < 120 and _apps_cache[1]:
+        return _apps_cache[1]
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", "Get-StartApps | ConvertTo-Json -Compress"],
+        capture_output=True, text=True, timeout=30,
+    ).stdout
+    apps = json.loads(out or "[]")
+    apps = [apps] if isinstance(apps, dict) else apps
+    _apps_cache = (time.time(), [{"name": a["Name"], "id": a["AppID"]} for a in apps])
+    return _apps_cache[1]
+
+
+def _find_app(name: str) -> dict:
+    wanted = name.lower().replace(" ", "")
+    apps = _start_apps()
+    for match in (
+        lambda a: a["name"].lower() == name.lower(),
+        lambda a: a["name"].lower().replace(" ", "") == wanted,
+        lambda a: wanted in a["name"].lower().replace(" ", ""),
+    ):
+        found = [a for a in apps if match(a)]
+        if found:
+            return sorted(found, key=lambda a: len(a["name"]))[0]
+    raise LookupError(
+        f"No installed app matches '{name}'. Use list_apps to see what is installed."
+    )
+
+
+def _launch(app: dict) -> None:
+    subprocess.Popen(["explorer.exe", "shell:AppsFolder\\" + app["id"]])
+
+
+@tool()
+def list_apps(query: str = "") -> dict:
+    """List installed apps (Start menu), optionally filtered by name, e.g. 'browser', 'chrome', 'steam'."""
+    apps = _start_apps()
+    q = (query or "").lower()
+    names = sorted({a["name"] for a in apps if q in a["name"].lower()})
+    return {"count": len(names), "apps": names[:200]}
+
+
+@tool()
+def launch_app(name: str) -> dict:
+    """Start an installed app by name (e.g. 'Google Chrome', 'DuckDuckGo', 'Steam', 'Blender'). Asks the owner first."""
+    app = _find_app(name)
+    confirm(f"Launch app: {app['name']}")
+    _launch(app)
+    time.sleep(1.5)
+    return {"launched": app["name"]}
+
+
+BROWSERS = {
+    "chrome": ("chrome.exe", "Google Chrome"),
+    "edge": ("msedge.exe", "Microsoft Edge"),
+    "firefox": ("firefox.exe", "Firefox"),
+    "brave": ("brave.exe", "Brave"),
+    "duckduckgo": (None, "DuckDuckGo"),
+}
+
+
+def _app_path(exe: str) -> str | None:
+    import winreg
+
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}") as key:
+                return winreg.QueryValue(key, None)
+        except OSError:
+            continue
+    return None
+
+
+@tool()
+def open_url(url: str, browser: str = "") -> dict:
+    """Open a website. browser: '' (default browser), 'chrome', 'edge', 'firefox', 'brave' or 'duckduckgo'. Asks the owner first."""
+    url = url.strip()
+    if not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+    choice = (browser or "").lower().replace(" ", "").replace("browser", "")
+    choice = {"google": "chrome", "googlechrome": "chrome", "microsoftedge": "edge", "ddg": "duckduckgo"}.get(choice, choice)
+    if choice and choice not in BROWSERS:
+        raise ValueError(f"Unknown browser '{browser}'. Use one of: {', '.join(BROWSERS)} or leave empty.")
+    label = BROWSERS[choice][1] if choice else "the default browser"
+    confirm(f"Open {url} in {label}")
+    if not choice:
+        os.startfile(url)  # type: ignore[attr-defined]
+        return {"opened": url, "browser": "default"}
+    exe, app_name = BROWSERS[choice]
+    path = _app_path(exe) if exe else None
+    if path:
+        subprocess.Popen([path, url])
+        return {"opened": url, "browser": app_name}
+    # Store apps such as DuckDuckGo cannot take a URL on the command line.
+    _launch(_find_app(app_name))
+    return {
+        "launched": app_name,
+        "note": f"{app_name} opened but cannot receive a URL directly. Focus it, press ctrl+l, type {url} and press enter.",
+    }
+
+
+@tool()
 def open_path(path: str) -> dict:
-    """Open a file or folder with its default Windows app. Asks the owner first."""
+    """Open a FILE or FOLDER on disk with its default Windows app (not for websites or apps; use open_url / launch_app). Asks the owner first."""
+    if "://" in path or path.lower().startswith("www."):
+        raise ValueError("That is a web address: use open_url instead.")
+    if path.lower().endswith(".exe"):
+        raise ValueError("To start a program use launch_app with its name.")
     target = safe_path(path)
     confirm(f"Open:\n{target}")
     os.startfile(str(target))  # type: ignore[attr-defined]
@@ -450,7 +587,7 @@ def open_path(path: str) -> dict:
     return {"opened": str(target)}
 
 
-@mcp.tool()
+@tool()
 def system_info() -> dict:
     """Basic info about this PC: screen size, allowed file roots, models in use."""
     import pyautogui
