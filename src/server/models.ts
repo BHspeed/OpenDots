@@ -52,10 +52,16 @@ export class ModelRegistry {
         signal: AbortSignal.timeout(3000),
       });
       const body = (await response.json()) as { models?: { name: string }[] };
-      this.available = (body.models ?? [])
-        .map((model) => model.name)
-        .filter((name) => !/embed/i.test(name))
-        .sort();
+      // Hide embedding models and Ollama's internal engine copies.
+      this.available = [
+        ...new Set(
+          (body.models ?? [])
+            .map((model) => model.name)
+            .filter(
+              (name) => !/embed/i.test(name) && !name.startsWith('llamacpp:'),
+            ),
+        ),
+      ].sort();
       this.fetchedAt = Date.now();
     } catch {
       // Ollama offline: keep the last known list.

@@ -51,6 +51,7 @@ export const toolGroups = {
     tools: [
       'browser_open',
       'browser_snapshot',
+      'browser_find',
       'browser_read',
       'browser_click',
       'browser_type',

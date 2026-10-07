@@ -42,24 +42,42 @@ RISKY = re.compile(
 # Marks visible interactive elements with data-ld-ref and describes them.
 SNAPSHOT_JS = r"""
 (maxElements) => {
-  document.querySelectorAll('[data-ld-ref]').forEach(e => e.removeAttribute('data-ld-ref'));
+  // Refs stay stable across snapshots for as long as an element exists, so a
+  // ref read earlier keeps working after other actions.
+  window.__ldNext = window.__ldNext || 1;
   const sel = 'a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],' +
     '[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=switch],[role=combobox],' +
-    '[role=searchbox],[role=textbox],[contenteditable=true]';
-  const visible = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
-    return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' &&
-      r.bottom > 0 && r.top < innerHeight * 3; };
-  const out = []; let n = 0;
-  for (const e of document.querySelectorAll(sel)) {
-    if (!visible(e)) continue;
-    n += 1; e.setAttribute('data-ld-ref', String(n));
+    '[role=searchbox],[role=textbox],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"])';
+  const visible = e => { const r = e.getBoundingClientRect(); if (r.width <= 1 || r.height <= 1) return false;
+    if (r.bottom <= 0 || r.top >= innerHeight * 3) return false;
+    const s = getComputedStyle(e); return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0'; };
+  const items = []; const seen = new Set();
+  for (const e of document.querySelectorAll(sel)) if (!seen.has(e) && visible(e)) { seen.add(e); items.push(e); }
+  // Many apps build buttons from divs/spans with click handlers: include the
+  // outermost pointer-cursor element that has no interactive element inside.
+  let checked = 0;
+  for (const e of document.querySelectorAll('div,span,li,img,svg,label,td,p,i')) {
+    if (++checked > 6000) break;
+    if (seen.has(e) || e.closest(sel) || e.querySelector(sel) || !visible(e)) continue;
+    if (getComputedStyle(e).cursor !== 'pointer') continue;
+    const parent = e.parentElement;
+    if (parent && getComputedStyle(parent).cursor === 'pointer') continue;
+    seen.add(e); items.push(e);
+  }
+  const inView = e => { const r = e.getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0; };
+  items.sort((a, b) => Number(inView(b)) - Number(inView(a)));
+  const out = [];
+  for (const e of items.slice(0, maxElements)) {
+    let ref = e.getAttribute('data-ld-ref');
+    if (!ref) { ref = String(window.__ldNext++); e.setAttribute('data-ld-ref', ref); }
     const tag = e.tagName.toLowerCase();
     const name = (e.getAttribute('aria-label') || e.innerText || e.value || e.getAttribute('placeholder') ||
-      e.getAttribute('title') || e.getAttribute('alt') || e.getAttribute('name') || '').trim().replace(/\s+/g, ' ').slice(0, 80);
-    out.push({ ref: n, tag, role: e.getAttribute('role') || '', type: e.getAttribute('type') || '',
-      name, href: tag === 'a' ? e.href.slice(0, 120) : undefined,
-      inView: e.getBoundingClientRect().top < innerHeight });
-    if (out.length >= maxElements) break;
+      e.getAttribute('title') || e.getAttribute('alt') || e.getAttribute('name') ||
+      e.querySelector('[alt],[aria-label],title')?.getAttribute('alt') ||
+      e.querySelector('[aria-label]')?.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    out.push({ ref: Number(ref), tag, role: e.getAttribute('role') || (e.matches(sel) ? '' : 'clickable'),
+      type: e.getAttribute('type') || '', name, href: tag === 'a' ? e.href.slice(0, 120) : undefined,
+      inView: inView(e) });
   }
   const main = document.querySelector('main, article, [role=main]') || document.body;
   return { elements: out, text: (main ? main.innerText : '').replace(/\n{3,}/g, '\n\n') };
@@ -150,7 +168,7 @@ class Browser:
         self._page = None
         self._refs = {}
 
-    async def snapshot(self, max_chars: int = 5000, max_elements: int = 80) -> dict:
+    async def snapshot(self, max_chars: int = 5000, max_elements: int = 150) -> dict:
         page = await self.page()
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=10_000)
@@ -174,9 +192,21 @@ class Browser:
 
     async def element(self, ref: int):
         page = await self.page()
-        if ref not in self._refs:
-            raise LookupError(f"Unknown ref [{ref}]. Take a browser_snapshot and use a current ref.")
-        return self._refs[ref], page.locator(f'[data-ld-ref="{ref}"]').first
+        locator = page.locator(f'[data-ld-ref="{ref}"]').first
+        if ref in self._refs:
+            return self._refs[ref], locator
+        if await locator.count():
+            info = await locator.evaluate(
+                """e => ({ tag: e.tagName.toLowerCase(), role: e.getAttribute('role') || '',
+                type: e.getAttribute('type') || '', name: (e.getAttribute('aria-label') || e.innerText ||
+                e.value || e.getAttribute('placeholder') || '').trim().slice(0, 80) })"""
+            )
+            self._refs[ref] = {"ref": ref, **info}
+            return self._refs[ref], locator
+        raise LookupError(
+            f"Element [{ref}] is no longer on the page. Use browser_find with the button's text, "
+            "or browser_snapshot, to get a current ref."
+        )
 
     async def highlight(self, locator) -> None:
         """Outline the element briefly so the owner sees what the agent targets."""
@@ -241,6 +271,28 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
         """Re-read the current page: URL, title, visible text and numbered interactive elements [ref]."""
         async with browser.lock:
             return await browser.snapshot(max_chars=max_chars if max_chars > 0 else 5000)
+
+    @tool()
+    async def browser_find(text: str, max_results: int = 10) -> dict:
+        """Find clickable elements or fields whose label contains text (e.g. 'Search', 'Next', 'Email').
+        Returns their [ref] numbers for browser_click / browser_type. Prefer this over guessing refs."""
+        async with browser.lock:
+            await browser.snapshot(max_chars=0, max_elements=400)
+            needle = (text or "").strip().lower()
+            matches = [
+                e for e in browser._refs.values()
+                if needle and (needle in (e.get("name") or "").lower() or needle in (e.get("href") or "").lower())
+            ]
+            limit = max_results if max_results > 0 else 10
+            return {
+                "query": text,
+                "matches": [
+                    f"[{e['ref']}] {e['role'] or e['tag']}: {e['name'] or '(no label)'}"
+                    + ("" if e.get("inView", True) else " (below)")
+                    for e in matches[:limit]
+                ],
+                "hint": "" if matches else "Nothing matched; try a shorter word, scroll, or take browser_screenshot.",
+            }
 
     @tool()
     async def browser_read(start: int = 0, max_chars: int = 15000) -> dict:

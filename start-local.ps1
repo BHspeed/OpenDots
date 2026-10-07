@@ -9,7 +9,7 @@ try {
 } catch {
   Write-Host 'Starting Ollama...'
   # Larger context so tool-using conversations are not truncated.
-  $env:OLLAMA_CONTEXT_LENGTH = '32768'
+  $env:OLLAMA_CONTEXT_LENGTH = '16384'
   Start-Process $ollama -ArgumentList serve -WindowStyle Hidden
   Start-Sleep 4
 }

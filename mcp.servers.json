@@ -1,7 +1,12 @@
 {
   "localtools": {
     "command": "localtools/.venv/Scripts/python.exe",
-    "args": ["localtools/server.py"],
-    "env": { "PYTHONIOENCODING": "utf-8" }
+    "args": [
+      "localtools/server.py"
+    ],
+    "env": {
+      "PYTHONIOENCODING": "utf-8",
+      "LOCALTOOLS_VISION_MODEL": "gemma4-e4b:latest"
+    }
   }
 }

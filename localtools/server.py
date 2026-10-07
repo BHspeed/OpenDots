@@ -435,7 +435,8 @@ def focus_window(title_contains: str) -> dict:
 
 @tool()
 def mouse_click(x: int, y: int, button: str = "left", clicks: int = 1) -> dict:
-    """Click at screen pixel (x, y). Take a screenshot first to find coordinates. Asks the owner first."""
+    """Click at a screen pixel (x, y) in a DESKTOP app. Not for web pages in the Dots' browser: use
+    browser_find + browser_click there (screen positions shift and miss). Asks the owner first."""
     import pyautogui
 
     confirm(f"{button}-click {clicks}x at ({x}, {y})")
