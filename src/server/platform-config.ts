@@ -1,4 +1,5 @@
 import type { WebConfig } from './parallel.js';
+import type { McpTools } from './mcp-tools.js';
 import type { SetupStatus } from '../shared/types.js';
 export interface PlatformConfig extends WebConfig {
   intelligenceKey?: string;
@@ -22,6 +23,9 @@ export interface PlatformConfig extends WebConfig {
   slackDotId?: string;
   runtimeUrl: string;
   ownerToken?: string;
+  mcp?: McpTools;
+  runTimeoutMs?: number;
+  maxOutputTokens?: number;
 }
 // Local-only: a model identifier is the only requirement. Local servers such
 // as Ollama accept any API key, so a placeholder is used when none is set.

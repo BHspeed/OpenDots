@@ -1,0 +1,7 @@
+{
+  "localtools": {
+    "command": "localtools/.venv/Scripts/python.exe",
+    "args": ["localtools/server.py"],
+    "env": { "PYTHONIOENCODING": "utf-8" }
+  }
+}
