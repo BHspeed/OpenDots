@@ -47,6 +47,7 @@ export function BrowserPanel() {
   const [address, setAddress] = useState('');
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [signInOpen, setSignInOpen] = useState(false);
   const [error, setError] = useState('');
   const wheel = useRef(0);
   const takeover = frame?.takeover ?? status?.takeover ?? false;
@@ -123,6 +124,40 @@ export function BrowserPanel() {
       y: ((event.clientY - box.top) / box.height) * (frame?.height ?? 0),
     };
   };
+  // Some sign-ins (e.g. Google) refuse any remotely controlled browser. This
+  // opens the same profile in a plain window; logins carry over to the Dots.
+  const signIn = (
+    <div className="browser-signin">
+      {signInOpen ? (
+        <span>
+          A plain Chrome window opened on the Dots&apos; profile. Sign in there,
+          close that window, then start the browser again.
+        </span>
+      ) : (
+        <>
+          <span>Site won&apos;t let you sign in here?</span>
+          <button
+            type="button"
+            className="text-button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await api('/browser/signin', 'POST', {
+                  url:
+                    address && !address.startsWith('about:')
+                      ? address
+                      : 'https://accounts.google.com',
+                });
+                setSignInOpen(true);
+              })
+            }
+          >
+            Sign in normally
+          </button>
+        </>
+      )}
+    </div>
+  );
   if (!status) return <p className="computer-panel">Checking the browser…</p>;
   if (!status.running)
     return (
@@ -143,6 +178,7 @@ export function BrowserPanel() {
         >
           {busy ? 'Starting…' : 'Start browser'}
         </button>
+        {signIn}
         {error && <p className="chat-error">{error}</p>}
       </div>
     );
@@ -267,6 +303,7 @@ export function BrowserPanel() {
             : 'Dots are in control. Watching live.'}
         </span>
       </div>
+      {signIn}
       {error && <p className="chat-error">{error}</p>}
     </div>
   );

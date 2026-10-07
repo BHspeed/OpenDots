@@ -4097,3 +4097,12 @@ h3 {
 .browser-badge.owner {
   background: #ff5a36;
 }
+
+.browser-signin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted, #6b6b6b);
+}

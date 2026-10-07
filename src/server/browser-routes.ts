@@ -67,6 +67,18 @@ export function browserRoutes(live: LiveBrowser) {
       return c.json({ error: failure(error) }, 502);
     }
   });
+  app.post('/browser/signin', async (c) => {
+    const body = z
+      .object({ url: z.string().min(1).max(2048) })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'Enter a sign-in URL.' }, 400);
+    try {
+      await live.signInWindow(body.data.url);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: failure(error) }, 502);
+    }
+  });
   app.post('/browser/takeover', async (c) => {
     const body = z
       .object({ on: z.boolean() })

@@ -2,6 +2,28 @@ import { chromium, type Browser, type CDPSession, type Page } from 'playwright';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { McpTools } from './mcp-tools.js';
+import { execFileSync, spawn } from 'node:child_process';
+
+function chromeExecutable() {
+  for (const exe of ['chrome.exe', 'msedge.exe'])
+    for (const hive of ['HKCU', 'HKLM'])
+      try {
+        const out = execFileSync(
+          'reg',
+          [
+            'query',
+            `${hive}\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exe}`,
+            '/ve',
+          ],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+        const path = out.match(/REG_SZ\s+(.+)/)?.[1]?.trim();
+        if (path) return path;
+      } catch {
+        // Not registered in this hive.
+      }
+  throw new Error('Chrome or Edge is not installed.');
+}
 
 // Live view of the Dots' browser (launched by localtools with a local DevTools
 // port). OpenDots attaches to the same browser to stream frames into the side
@@ -25,11 +47,39 @@ export class LiveBrowser {
     takeoverFile = process.env.LOCALTOOLS_TAKEOVER_FILE ??
       'localtools/output/browser-takeover.flag',
     private mcp?: McpTools,
+    private profile = resolve(
+      process.env.LOCALTOOLS_BROWSER_PROFILE ?? 'localtools/browser-profile',
+    ),
   ) {
     this.takeoverFile = resolve(takeoverFile);
   }
   get takeover() {
     return existsSync(this.takeoverFile);
+  }
+  /**
+   * Opens the Dots' profile in a plain Chrome window with no DevTools port, for
+   * sign-ins that refuse any controlled browser. Logins are saved to the
+   * profile; close the window and the Dots use them on their next start.
+   */
+  async signInWindow(url: string) {
+    const browser = await this.connect();
+    if (browser) {
+      const session = await browser.newBrowserCDPSession();
+      await session.send('Browser.close').catch(() => undefined);
+      for (let i = 0; i < 40 && (await this.connect()); i++)
+        await new Promise((done) => setTimeout(done, 250));
+    }
+    const target = /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`;
+    spawn(
+      chromeExecutable(),
+      [
+        `--user-data-dir=${this.profile}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        target,
+      ],
+      { detached: true, stdio: 'ignore' },
+    ).unref();
   }
   setTakeover(on: boolean) {
     if (on) {

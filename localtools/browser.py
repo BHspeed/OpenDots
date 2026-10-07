@@ -1,5 +1,9 @@
 """Native browser for Dots: a visible Chrome (or Edge) window driven by Playwright.
 
+Chrome is started as a normal process (sandbox on, no automation flags) with a
+local DevTools port, and Playwright attaches to it. A Playwright-launched
+browser is flagged as automated, which sites such as Google sign-in reject.
+
 Pages are returned as readable text plus numbered interactive elements, so a
 model clicks [ref] numbers instead of guessing pixels. The browser uses its own
 persistent profile (logins stay, the owner's normal Chrome is untouched).
@@ -12,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -27,7 +33,9 @@ TAKEOVER_FLAG = Path(
 )
 RISKY = re.compile(
     r"\b(buy|pay|purchase|order|checkout|place order|send|post|publish|submit|delete|remove|"
-    r"confirm|sign ?in|log ?in|sign ?up|register|subscribe|transfer|donate|accept|agree|install|download|upload)\b",
+    r"confirm|sign ?in|log ?in|sign ?up|register|subscribe|transfer|donate|accept|agree|install|download|upload|"
+    # Trading and money movement always need the owner's approval.
+    r"sell|trade|deposit|withdraw|higher|lower|call|put|invest|bet|wager|stake|cash ?out)\b",
     re.I,
 )
 
@@ -59,9 +67,53 @@ SNAPSHOT_JS = r"""
 """
 
 
+EXECUTABLES = {"chrome": "chrome.exe", "msedge": "msedge.exe"}
+WINDOW = os.environ.get("LOCALTOOLS_BROWSER_SIZE", "1440,900")
+
+
+def browser_executable() -> str:
+    import winreg
+
+    for channel in CHANNELS:
+        exe = EXECUTABLES.get(channel, channel)
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                key_path = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + exe
+                with winreg.OpenKey(hive, key_path) as key:
+                    return winreg.QueryValue(key, None)
+            except OSError:
+                continue
+    raise RuntimeError("Chrome or Edge is not installed.")
+
+
+def debugger_up() -> bool:
+    import httpx
+
+    try:
+        return httpx.get(f"http://127.0.0.1:{CDP_PORT}/json/version", timeout=1).status_code == 200
+    except Exception:
+        return False
+
+
+def launch_chrome(url: str = "about:blank", debug: bool = True) -> subprocess.Popen:
+    """Start a normal Chrome window on the Dots' profile (no automation flags)."""
+    PROFILE.mkdir(parents=True, exist_ok=True)
+    args = [
+        browser_executable(),
+        f"--user-data-dir={PROFILE}",
+        f"--window-size={WINDOW}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if debug:
+        args.append(f"--remote-debugging-port={CDP_PORT}")
+    return subprocess.Popen(args + [url])
+
+
 class Browser:
     def __init__(self) -> None:
         self._pw = None
+        self._browser = None
         self._context = None
         self._page = None
         self._refs: dict[int, dict] = {}
@@ -71,32 +123,29 @@ class Browser:
         if self._context is None:
             from playwright.async_api import async_playwright
 
-            self._pw = await async_playwright().start()
-            PROFILE.mkdir(parents=True, exist_ok=True)
-            errors = []
-            for channel in CHANNELS:
-                try:
-                    self._context = await self._pw.chromium.launch_persistent_context(
-                        str(PROFILE), channel=channel, headless=False, no_viewport=True,
-                        args=[
-                            # Fixed size keeps the live view readable on ultrawide screens.
-                            f"--window-size={os.environ.get('LOCALTOOLS_BROWSER_SIZE', '1440,900')}",
-                            f"--remote-debugging-port={CDP_PORT}",
-                            "--remote-debugging-address=127.0.0.1",
-                        ],
-                    )
-                    break
-                except Exception as error:  # try the next installed browser
-                    errors.append(f"{channel}: {error}")
-            if self._context is None:
-                raise RuntimeError("Could not start a browser. " + " | ".join(errors))
-            self._context.on("close", lambda *_: self._reset())
+            if self._pw is None:
+                self._pw = await async_playwright().start()
+            if not debugger_up():
+                launch_chrome()
+                deadline = time.time() + 20
+                while not debugger_up():
+                    if time.time() > deadline:
+                        raise RuntimeError(
+                            "Chrome did not open its local control port. If the Dots' browser window "
+                            "is already open without it (e.g. from 'Sign in normally'), close it and retry."
+                        )
+                    await asyncio.sleep(0.3)
+            # Attach to the normal Chrome process instead of launching an automated one.
+            self._browser = await self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
+            self._browser.on("disconnected", lambda *_: self._reset())
+            self._context = self._browser.contexts[0]
         if self._page is None or self._page.is_closed():
             pages = [p for p in self._context.pages if not p.is_closed()]
             self._page = pages[-1] if pages else await self._context.new_page()
         return self._page
 
     def _reset(self) -> None:
+        self._browser = None
         self._context = None
         self._page = None
         self._refs = {}
@@ -324,7 +373,12 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
     async def browser_close() -> dict:
         """Close the Dots' browser window (the profile and logins are kept)."""
         async with browser.lock:
-            if browser._context is not None:
-                await browser._context.close()
+            # Attached over CDP, close() only disconnects; ask Chrome to exit.
+            if browser._browser is not None:
+                try:
+                    session = await browser._browser.new_browser_cdp_session()
+                    await session.send("Browser.close")
+                except Exception:
+                    pass
             browser._reset()
             return {"closed": True}
