@@ -26,12 +26,9 @@ const workspace = new WorkspaceStore(
   process.env.OWNER_ID ?? 'opendots-owner',
 );
 const config: PlatformConfig = {
-  intelligenceKey: process.env.INTELLIGENCE_API_KEY,
-  intelligenceApiUrl: process.env.INTELLIGENCE_API_URL || undefined,
-  intelligenceWsUrl: process.env.INTELLIGENCE_WS_URL || undefined,
   apiKey: process.env.OPENAI_API_KEY,
   model: process.env.OPENAI_MODEL,
-  baseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+  baseUrl: process.env.OPENAI_BASE_URL ?? 'http://127.0.0.1:11434/v1',
   webSearchProvider: webSearchProvider(process.env.WEB_SEARCH_PROVIDER),
   parallelApiKey: process.env.PARALLEL_API_KEY,
   browserUrl: process.env.BROWSER_URL,
@@ -53,7 +50,7 @@ const config: PlatformConfig = {
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
 };
-const platform = new Platform(store, workspace, config);
+const platform = new Platform(store, workspace, config, database);
 const researchConfig = {
   mode: 'live' as const,
   apiKey: config.apiKey,
@@ -71,16 +68,13 @@ const runner = new Runner(
     const threadId = workspace.taskThread(claim.id);
     if (!threadId)
       throw new Error(
-        'This legacy task has no Intelligence conversation. Create a new scheduled task from a conversation.',
+        'This legacy task has no conversation. Create a new scheduled task from a conversation.',
       );
-    progress('Running this task in its Intelligence conversation.');
+    progress('Running this task in its local conversation.');
     const text = await platform.turn(threadId, claim.prompt, signal);
     return { text, sources: [], sample: false };
   },
 );
-const wsOrigin = new URL(
-  config.intelligenceWsUrl ?? 'wss://realtime.intelligence.copilotkit.ai',
-).origin;
 const app = createApp({
   store,
   runner,
@@ -98,7 +92,7 @@ app.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'no-referrer');
   c.header(
     'Content-Security-Policy',
-    `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${wsOrigin}; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
+    `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
   );
   await next();
 });

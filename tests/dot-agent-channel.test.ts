@@ -39,7 +39,7 @@ afterEach(() => {
   inner.configure.mockClear();
 });
 
-it('uses the conversation container for delivery and preserves tools and override restrictions', async () => {
+it('never configures cloud learned skills and preserves tool and override restrictions', async () => {
   const f = fixture(false);
   const dot = f.workspace.dots()[0];
   f.workspace.updateDot(dot.id, {
@@ -47,18 +47,11 @@ it('uses the conversation container for delivery and preserves tools and overrid
     learningContainerId: 'research',
     skillDeliveryEnabled: true,
   });
-  f.workspace.bindThread('learning', dot.id, 'Learning');
-  f.workspace.updateDot(dot.id, {
-    ...dot,
-    learningContainerId: 'writing',
-    skillDeliveryEnabled: true,
-  });
   inner.run.mockReturnValue(of());
   await lastValueFrom(
     f.agent
       .run({
         ...f.input,
-        threadId: 'learning',
         tools: [
           { name: 'untrusted_tool', description: 'Untrusted', parameters: {} },
         ],
@@ -68,32 +61,15 @@ it('uses the conversation container for delivery and preserves tools and overrid
   );
   expect(inner.configure).toHaveBeenLastCalledWith(
     expect.objectContaining({
-      learnedSkills: {
-        containers: [{ id: 'research' }],
-        apiKey: 'fixture',
-        apiUrl: undefined,
-      },
       type: 'tanstack',
       factory: expect.any(Function),
     }),
   );
+  expect(inner.configure.mock.lastCall?.[0]).not.toHaveProperty(
+    'learnedSkills',
+  );
   expect(inner.run).toHaveBeenLastCalledWith(
     expect.objectContaining({ tools: [], forwardedProps: {} }),
-  );
-  await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
-  expect(inner.configure).toHaveBeenLastCalledWith(
-    expect.objectContaining({ learnedSkills: undefined, type: 'tanstack' }),
-  );
-  f.workspace.updateDot(dot.id, {
-    ...dot,
-    learningContainerId: 'writing',
-    skillDeliveryEnabled: false,
-  });
-  await lastValueFrom(
-    f.agent.run({ ...f.input, threadId: 'learning' }).pipe(toArray()),
-  );
-  expect(inner.configure).toHaveBeenLastCalledWith(
-    expect.objectContaining({ learnedSkills: undefined, type: 'tanstack' }),
   );
 });
 function fixture(channel = true) {
@@ -106,7 +82,6 @@ function fixture(channel = true) {
     store,
     workspace,
     {
-      intelligenceKey: 'fixture',
       apiKey: 'fixture',
       model: 'fixture',
       baseUrl: 'https://unused.invalid',

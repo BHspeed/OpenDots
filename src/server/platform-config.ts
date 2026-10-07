@@ -23,31 +23,17 @@ export interface PlatformConfig extends WebConfig {
   runtimeUrl: string;
   ownerToken?: string;
 }
-export function setupStatus(
-  config: PlatformConfig,
-  slack = 'not_configured',
-  activationFailed = false,
-): SetupStatus {
-  const missing = [
-    !config.intelligenceKey && 'INTELLIGENCE_API_KEY',
-    !config.apiKey && 'OPENAI_API_KEY',
-    !config.model && 'OPENAI_MODEL',
-  ].filter((item): item is string => !!item);
-  const declaredSlack = !!(
-    config.slackChannel &&
-    config.slackTeam &&
-    config.slackUsers.length
+// Local-only: a model identifier is the only requirement. Local servers such
+// as Ollama accept any API key, so a placeholder is used when none is set.
+// Slack channels require the CopilotKit cloud and are disabled here.
+export function setupStatus(config: PlatformConfig): SetupStatus {
+  const missing = [!config.model && 'OPENAI_MODEL'].filter(
+    (item): item is string => !!item,
   );
-  slack = declaredSlack
-    ? activationFailed && slack !== 'online'
-      ? 'activation_failed'
-      : slack
-    : config.slackChannel || config.slackTeam || config.slackUsers.length
-      ? 'setup_required'
-      : 'not_configured';
+  const slack = 'not_configured';
   return {
-    intelligence: !!config.intelligenceKey,
-    model: !!(config.apiKey && config.model),
+    intelligence: false,
+    model: !!config.model,
     browser: !!(config.browserUrl && config.browserSecret),
     voice: !!(config.voiceKey && config.voiceModel && !missing.length),
     slack,
