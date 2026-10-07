@@ -4,8 +4,11 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  lstatSync,
+  rmdirSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -114,6 +117,31 @@ export class DevWorkspace {
     if (!this.branch || !existsSync(this.worktree))
       throw new Error('No change in progress. Call dev_start first.');
   }
+  /**
+   * Removes the working copy. The shared node_modules junction is unlinked
+   * first: a forced worktree removal follows junctions on Windows and would
+   * delete the main checkout's installed packages.
+   */
+  private async removeWorktree() {
+    const modules = join(this.worktree, 'node_modules');
+    try {
+      if (lstatSync(modules).isSymbolicLink()) {
+        try {
+          unlinkSync(modules);
+        } catch {
+          rmdirSync(modules); // junctions are removed as directories
+        }
+      }
+    } catch {
+      // No link present.
+    }
+    if (existsSync(modules))
+      throw new Error(
+        'Refusing to remove the dev workspace: its node_modules is not a link.',
+      );
+    await this.git(['worktree', 'remove', '--force', this.worktree]);
+    await this.git(['worktree', 'prune']);
+  }
   /** Fresh branch + worktree from the current code. */
   async start(title: string) {
     const head = (
@@ -145,7 +173,7 @@ export class DevWorkspace {
     return { branch, based_on: head, workspace: this.worktree };
   }
   async discard() {
-    await this.git(['worktree', 'remove', '--force', this.worktree]);
+    await this.removeWorktree();
     if (this.branch) await this.git(['branch', '-D', this.branch]);
     this.branch = undefined;
   }
@@ -297,7 +325,7 @@ export class DevWorkspace {
         review.createdAt,
       );
     // The branch keeps the work; free the worktree for the next change.
-    await this.git(['worktree', 'remove', '--force', this.worktree]);
+    await this.removeWorktree();
     this.branch = undefined;
     return review;
   }

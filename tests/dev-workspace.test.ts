@@ -19,6 +19,8 @@ it('edits on a branch, refuses protected files, and only merges on apply', async
   const repo = join(root, 'app');
   mkdirSync(join(repo, 'src', 'shared'), { recursive: true });
   mkdirSync(join(repo, 'node_modules'));
+  // A package file that must survive the dev workspace being removed.
+  writeFileSync(join(repo, 'node_modules', 'keep.txt'), 'installed');
   writeFileSync(
     join(repo, 'src', 'math.ts'),
     'export const add = (a: number, b: number) => a - b;\n',
@@ -69,6 +71,12 @@ it('edits on a branch, refuses protected files, and only merges on apply', async
     );
     expect(dev.reviews()[0].status).toBe('applied');
     expect(git(repo, 'branch', '--list', 'dev/*').trim()).toBe('');
+    // Discarding a workspace must never delete the shared packages.
+    await dev.start('second change');
+    await dev.discard();
+    expect(readFileSync(join(repo, 'node_modules', 'keep.txt'), 'utf8')).toBe(
+      'installed',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
