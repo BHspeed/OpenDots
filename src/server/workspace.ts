@@ -5,6 +5,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateLearningSettings } from '../shared/learning.js';
+import { legacyToolGroups } from '../shared/capabilities.js';
 import type { CallReceipt, Conversation, Dot, Space } from '../shared/types.js';
 export class WorkspaceStore {
   private db: DatabaseSync;
@@ -22,11 +23,19 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS thread_bindings(id TEXT PRIMARY KEY, dotId TEXT NOT NULL, ownerId TEXT NOT NULL, title TEXT NOT NULL, createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS task_threads(taskId TEXT PRIMARY KEY, threadId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY, threadId TEXT NOT NULL, startedAt INTEGER NOT NULL, endedAt INTEGER, status TEXT NOT NULL, transcript TEXT NOT NULL, error TEXT);
-      CREATE TABLE IF NOT EXISTS captures(threadId TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS captures(threadId TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS platform_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS delegations(parentThreadId TEXT NOT NULL, dotId TEXT NOT NULL, threadId TEXT NOT NULL, PRIMARY KEY(parentThreadId, dotId));`);
     for (const [table, column, definition] of [
       ['dots', 'learningContainerId', 'TEXT'],
       ['dots', 'skillDeliveryEnabled', 'INTEGER NOT NULL DEFAULT 0'],
       ['thread_bindings', 'learningContainerId', 'TEXT'],
+      ['dots', 'model', 'TEXT'],
+      [
+        'dots',
+        'toolGroups',
+        `TEXT NOT NULL DEFAULT '${JSON.stringify(legacyToolGroups)}'`,
+      ],
     ]) {
       if (
         !this.db
@@ -77,6 +86,59 @@ export class WorkspaceStore {
   close() {
     this.db.close();
   }
+  setting(key: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT value FROM platform_settings WHERE key=?')
+      .get(key);
+    return row ? String(row.value) : undefined;
+  }
+  setSetting(key: string, value: string) {
+    this.db
+      .prepare(
+        'INSERT INTO platform_settings VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+      )
+      .run(key, value);
+  }
+  delegationThread(parentThreadId: string, dotId: string) {
+    const row = this.db
+      .prepare(
+        'SELECT threadId FROM delegations WHERE parentThreadId=? AND dotId=?',
+      )
+      .get(parentThreadId, dotId);
+    return row ? String(row.threadId) : undefined;
+  }
+  bindDelegation(parentThreadId: string, dotId: string, threadId: string) {
+    this.db
+      .prepare('INSERT OR REPLACE INTO delegations VALUES (?, ?, ?)')
+      .run(parentThreadId, dotId, threadId);
+  }
+  /** Creates the starter specialist team once; never re-adds deleted Dots. */
+  seedTeam(
+    team: {
+      name: string;
+      instructions: string;
+      model: string | null;
+      toolGroups: string[];
+    }[],
+  ) {
+    if (this.setting('teamSeeded')) return;
+    const space = this.spaces()[0];
+    for (const dot of team)
+      if (!this.dots().some((existing) => existing.name === dot.name))
+        this.createDot(
+          space.id,
+          dot.name,
+          dot.instructions,
+          false,
+          true,
+          [space.id],
+          null,
+          false,
+          dot.model,
+          dot.toolGroups,
+        );
+    this.setSetting('teamSeeded', '1');
+  }
   spaces(): Space[] {
     return this.db
       .prepare('SELECT * FROM spaces ORDER BY createdAt')
@@ -109,6 +171,8 @@ export class WorkspaceStore {
         researchAllowed: !!row.researchAllowed,
         memoryAllowed: !!row.memoryAllowed,
         skillDeliveryEnabled: !!row.skillDeliveryEnabled,
+        model: row.model ?? null,
+        toolGroups: JSON.parse(String(row.toolGroups ?? '[]')) as string[],
       })) as unknown as Dot[];
   }
   dot(id: string) {
@@ -123,6 +187,8 @@ export class WorkspaceStore {
     spaceIds: string[] = [spaceId],
     learningContainerId: string | null = null,
     skillDeliveryEnabled = false,
+    model: string | null = null,
+    toolGroups: string[] = legacyToolGroups,
   ): Dot {
     this.validateSpaceAccess(spaceId, spaceIds);
     validateLearningSettings(learningContainerId, skillDeliveryEnabled);
@@ -136,13 +202,15 @@ export class WorkspaceStore {
       memoryAllowed,
       learningContainerId,
       skillDeliveryEnabled,
+      model,
+      toolGroups: [...new Set(toolGroups)],
       createdAt: Date.now(),
     };
     this.db.exec('BEGIN');
     try {
       this.db
         .prepare(
-          'INSERT INTO dots (id, spaceId, name, instructions, researchAllowed, memoryAllowed, createdAt, learningContainerId, skillDeliveryEnabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO dots (id, spaceId, name, instructions, researchAllowed, memoryAllowed, createdAt, learningContainerId, skillDeliveryEnabled, model, toolGroups) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         )
         .run(
           dot.id,
@@ -154,6 +222,8 @@ export class WorkspaceStore {
           dot.createdAt,
           learningContainerId,
           +skillDeliveryEnabled,
+          model,
+          JSON.stringify(dot.toolGroups),
         );
       for (const id of dot.spaceIds)
         this.db.prepare('INSERT INTO dot_spaces VALUES (?, ?)').run(dot.id, id);
@@ -186,6 +256,8 @@ export class WorkspaceStore {
       spaceIds?: string[];
       learningContainerId?: string | null;
       skillDeliveryEnabled?: boolean;
+      model?: string | null;
+      toolGroups?: string[];
     },
   ): Dot {
     const current = this.dot(id);
@@ -216,8 +288,15 @@ export class WorkspaceStore {
           id,
         );
       this.db
-        .prepare('UPDATE dots SET spaceId=? WHERE id=?')
-        .run(defaultSpace, id);
+        .prepare('UPDATE dots SET spaceId=?, model=?, toolGroups=? WHERE id=?')
+        .run(
+          defaultSpace,
+          patch.model === undefined ? (current.model ?? null) : patch.model,
+          JSON.stringify([
+            ...new Set(patch.toolGroups ?? current.toolGroups ?? []),
+          ]),
+          id,
+        );
       this.db.prepare('DELETE FROM dot_spaces WHERE dotId=?').run(id);
       for (const space of new Set(spaceIds))
         this.db.prepare('INSERT INTO dot_spaces VALUES (?, ?)').run(id, space);

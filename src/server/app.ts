@@ -1,6 +1,7 @@
 import { computerRoutes } from './computer-routes.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { existsSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { Store } from './store.js';
@@ -27,12 +28,19 @@ export function createApp({
   platform,
 }: AppOptions) {
   const app = new Hono();
-  app.use(
-    '/api/*',
-    bodyLimit({
-      maxSize: 1_000_000,
-      onError: (c) => c.json({ error: 'Request is too large.' }, 413),
-    }),
+  const smallBodies = bodyLimit({
+    maxSize: 1_000_000,
+    onError: (c) => c.json({ error: 'Request is too large.' }, 413),
+  });
+  // Chat attachments (base64) may be up to ~20 MB.
+  const uploadBodies = bodyLimit({
+    maxSize: 28_500_000,
+    onError: (c) => c.json({ error: 'Attachment is too large.' }, 413),
+  });
+  app.use('/api/*', (c, next) =>
+    c.req.path === '/api/uploads'
+      ? uploadBodies(c, next)
+      : smallBodies(c, next),
   );
   app.use('/api/*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
@@ -91,6 +99,21 @@ export function createApp({
         prompt: z.string().trim().min(3).max(4000),
         intervalSeconds: interval.optional(),
         threadId: z.string().optional(),
+        trigger: z
+          .discriminatedUnion('type', [
+            z.object({ type: z.literal('interval') }),
+            z.object({
+              type: z.literal('daily'),
+              time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+              days: z.array(z.number().int().min(0).max(6)).max(7),
+            }),
+            z.object({
+              type: z.literal('file'),
+              folder: z.string().min(3).max(500),
+              pattern: z.string().min(1).max(100),
+            }),
+          ])
+          .optional(),
       })
       .strict()
       .safeParse(await c.req.json().catch(() => null));
@@ -124,9 +147,15 @@ export function createApp({
         );
       }
     }
+    const trigger = parsed.data.trigger;
+    if (trigger?.type === 'file' && !existsSync(trigger.folder))
+      return c.json({ error: 'That folder does not exist.' }, 400);
     const task = store.createTask(
       parsed.data.prompt,
-      parsed.data.intervalSeconds,
+      trigger && trigger.type !== 'interval'
+        ? null
+        : parsed.data.intervalSeconds,
+      trigger && trigger.type !== 'interval' ? JSON.stringify(trigger) : null,
     );
     if (platform && parsed.data.threadId)
       platform.workspace.bindTask(task.id, parsed.data.threadId);

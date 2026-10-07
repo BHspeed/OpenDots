@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { nextDailyRun, parseTrigger } from '../shared/triggers.js';
 import type {
   Action,
   Detail,
@@ -14,6 +15,12 @@ import type {
 } from '../shared/types.js';
 
 export type Claim = Task & { lease: string };
+function nextRun(task: Task, now: number): number | null {
+  const trigger = parseTrigger(task.trigger);
+  if (trigger?.type === 'daily') return nextDailyRun(trigger, now);
+  if (trigger?.type === 'file') return null;
+  return task.intervalSeconds ? now + task.intervalSeconds * 1000 : null;
+}
 const defaults: Settings = {
   name: 'Dot',
   paused: false,
@@ -22,7 +29,11 @@ const defaults: Settings = {
 };
 export class Store {
   private db: DatabaseSync;
-  constructor(path: string) {
+  constructor(
+    path: string,
+    /** Worker lease; local models can take minutes per run. */
+    private leaseMs = 900_000,
+  ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
@@ -34,6 +45,14 @@ export class Store {
       CREATE INDEX IF NOT EXISTS tasks_due ON tasks(status, nextRunAt);
       CREATE INDEX IF NOT EXISTS runs_task ON runs(taskId, startedAt);
       CREATE INDEX IF NOT EXISTS events_task ON events(taskId, id);`);
+    for (const column of ['trigger', 'pendingInput'])
+      if (
+        !this.db
+          .prepare('PRAGMA table_info(tasks)')
+          .all()
+          .some((field) => field.name === column)
+      )
+        this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
     this.db
       .prepare('INSERT OR IGNORE INTO settings VALUES (1, ?)')
       .run(JSON.stringify(defaults));
@@ -92,16 +111,56 @@ export class Store {
       .prepare('SELECT * FROM tasks WHERE id=?')
       .get(id) as unknown as Task | undefined;
   }
-  createTask(prompt: string, intervalSeconds: number | null = null): Task {
+  createTask(
+    prompt: string,
+    intervalSeconds: number | null = null,
+    trigger: string | null = null,
+  ): Task {
     const now = Date.now();
     const id = randomUUID();
+    const parsed = parseTrigger(trigger);
+    // Event and clock triggers wait for their first event instead of running now.
+    const waiting = parsed?.type === 'daily' || parsed?.type === 'file';
     this.db
       .prepare(
-        "INSERT INTO tasks VALUES (?, ?, 'queued', ?, NULL, ?, ?, NULL, NULL, NULL)",
+        'INSERT INTO tasks (id, prompt, status, intervalSeconds, nextRunAt, createdAt, updatedAt, error, lease, leaseUntil, trigger) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)',
       )
-      .run(id, prompt, intervalSeconds, now, now);
-    this.event(id, null, 'Task added to the research queue.');
+      .run(
+        id,
+        prompt,
+        waiting ? 'completed' : 'queued',
+        intervalSeconds,
+        parsed?.type === 'daily' ? nextDailyRun(parsed, now) : null,
+        now,
+        now,
+        trigger,
+      );
+    this.event(
+      id,
+      null,
+      parsed?.type === 'daily'
+        ? `Runs daily at ${parsed.time}.`
+        : parsed?.type === 'file'
+          ? `Runs when a file matching ${parsed.pattern} appears in ${parsed.folder}.`
+          : 'Task added to the research queue.',
+    );
     return this.task(id)!;
+  }
+  /** Queue a triggered run, carrying what fired it into the next run. */
+  fire(id: string, input: string): Task | undefined {
+    return this.transaction(() => {
+      const task = this.task(id);
+      if (!task || ['paused', 'cancelled'].includes(task.status))
+        return undefined;
+      const pending = [task.pendingInput, input].filter(Boolean).join('\n');
+      this.db
+        .prepare(
+          `UPDATE tasks SET pendingInput=?, status=CASE WHEN status='running' THEN status ELSE 'queued' END, error=NULL, updatedAt=? WHERE id=?`,
+        )
+        .run(pending.slice(-8000), Date.now(), id);
+      this.event(id, null, `Triggered: ${input.slice(0, 300)}`);
+      return this.task(id);
+    });
   }
   detail(id: string): Detail | undefined {
     const task = this.task(id);
@@ -211,16 +270,20 @@ export class Store {
       const lease = randomUUID();
       this.db
         .prepare(
-          "UPDATE tasks SET status='running', lease=?, leaseUntil=?, nextRunAt=NULL, error=NULL, updatedAt=? WHERE id=?",
+          "UPDATE tasks SET status='running', lease=?, leaseUntil=?, nextRunAt=NULL, error=NULL, pendingInput=NULL, updatedAt=? WHERE id=?",
         )
-        .run(lease, now + 180_000, now, task.id);
+        .run(lease, now + this.leaseMs, now, task.id);
       this.db
         .prepare(
           "INSERT INTO runs VALUES (?, ?, 'running', ?, NULL, NULL, NULL)",
         )
         .run(lease, task.id, now);
       this.event(task.id, lease, 'Research worker started.');
-      return { ...this.task(task.id)!, lease };
+      return {
+        ...this.task(task.id)!,
+        pendingInput: task.pendingInput ?? null,
+        lease,
+      };
     });
   }
   owns(claim: Claim): boolean {
@@ -238,11 +301,13 @@ export class Store {
         .run(now, JSON.stringify(result), claim.lease);
       this.db
         .prepare(
-          "UPDATE tasks SET status='completed', lease=NULL, leaseUntil=NULL, updatedAt=?, nextRunAt=? WHERE id=?",
+          'UPDATE tasks SET status=?, lease=NULL, leaseUntil=NULL, updatedAt=?, nextRunAt=? WHERE id=?',
         )
         .run(
+          // A trigger that fired during this run queues a follow-up run.
+          task.pendingInput ? 'queued' : 'completed',
           now,
-          task.intervalSeconds ? now + task.intervalSeconds * 1000 : null,
+          nextRun(task, now),
           claim.id,
         );
       this.event(

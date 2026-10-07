@@ -10,6 +10,7 @@ import { WorkspaceStore } from './workspace.js';
 import { Platform } from './platform.js';
 import type { PlatformConfig } from './platform-config.js';
 import { McpTools, loadMcpServers } from './mcp-tools.js';
+import { FileTriggers } from './file-triggers.js';
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 4310);
 const ownerToken = process.env.OWNER_TOKEN;
@@ -75,10 +76,18 @@ const runner = new Runner(
         'This legacy task has no conversation. Create a new scheduled task from a conversation.',
       );
     progress('Running this task in its local conversation.');
-    const text = await platform.turn(threadId, claim.prompt, signal);
+    const prompt = claim.pendingInput
+      ? `${claim.prompt}
+
+This run was triggered by:
+${claim.pendingInput}`
+      : claim.prompt;
+    const text = await platform.turn(threadId, prompt, signal);
     return { text, sources: [], sample: false };
   },
+  config.runTimeoutMs ?? 600_000,
 );
+const fileTriggers = new FileTriggers(store);
 const app = createApp({
   store,
   runner,
@@ -106,6 +115,7 @@ app.get('*', serveStatic({ path: './dist/client/index.html' }));
 const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
   console.log(`OpenDots template listening on http://${host}:${info.port}`);
   runner.start();
+  fileTriggers.start();
   void platform
     .start()
     .catch((error) =>
@@ -116,7 +126,10 @@ const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
     );
 });
 const shutdown = createShutdown({
-  stopRunner: () => runner.stop(),
+  stopRunner: () => {
+    fileTriggers.stop();
+    runner.stop();
+  },
   stopPlatform: async () => {
     await platform.stop();
     await config.mcp?.close();

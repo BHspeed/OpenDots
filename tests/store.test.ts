@@ -78,7 +78,7 @@ describe('durable task lifecycle', () => {
     store.createTask('Recover me');
     const now = Date.now();
     const old = store.claim(now)!;
-    const recovered = store.claim(now + 180_001)!;
+    const recovered = store.claim(now + 900_001)!;
     expect(recovered.id).toBe(old.id);
     expect(recovered.lease).not.toBe(old.lease);
     expect(store.finish(old, { text: 'Old', sources: [], sample: true })).toBe(

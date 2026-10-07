@@ -1,5 +1,8 @@
 import { pageRoutes } from './page-routes.js';
 import { Hono } from 'hono';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join, resolve } from 'node:path';
+import { defaultToolGroups } from '../shared/capabilities.js';
 import { z } from 'zod';
 import { Platform } from './platform.js';
 import { VoiceService } from './voice.js';
@@ -17,13 +20,37 @@ const dotSchema = z
     skillDeliveryEnabled: z.boolean().optional(),
     spaceIds: z.array(z.string().min(1)).min(1).max(100).optional(),
     spaceId: z.string().min(1).optional(),
+    model: z.string().trim().max(120).nullable().optional(),
+    toolGroups: z
+      .array(z.string().regex(/^(mcp:)?[a-z0-9_-]+$/i))
+      .max(50)
+      .optional(),
   })
   .strict();
+const uploadTypes: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'image/bmp': '.bmp',
+  'text/plain': '.txt',
+  'text/markdown': '.md',
+  'text/csv': '.csv',
+  'application/json': '.json',
+  'application/pdf': '.pdf',
+};
 export function workspaceRoutes(platform: Platform, voice: VoiceService) {
   const app = new Hono();
   app.route('/', pageRoutes(platform));
-  app.get('/workspace', (c) =>
+  app.get('/workspace', async (c) =>
     c.json({
+      models: {
+        ...platform.models.settings(),
+        available: await platform.models.refresh(),
+      },
+      mcpGroups: (platform.config.mcp?.extraServers() ?? []).map(
+        (name) => `mcp:${name}`,
+      ),
       spaces: platform.workspace.spaces(),
       dots: platform.workspace.dots(),
       conversations: platform.workspace.conversations(),
@@ -87,9 +114,50 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         data.data.spaceIds,
         data.data.learningContainerId,
         data.data.skillDeliveryEnabled,
+        data.data.model ?? null,
+        data.data.toolGroups ?? defaultToolGroups,
       ),
       201,
     );
+  });
+  app.patch('/models', async (c) => {
+    const data = z
+      .object({
+        defaultModel: z.string().trim().min(1).max(120).optional(),
+        plannerModel: z.string().trim().min(1).max(120).optional(),
+        visionModel: z.string().trim().min(1).max(120).optional(),
+      })
+      .strict()
+      .safeParse(await c.req.json());
+    if (!data.success) return c.json({ error: 'Invalid model settings.' }, 400);
+    return c.json(platform.models.update(data.data));
+  });
+  // Files attached in chat are saved locally so Dots can open them with tools.
+  app.post('/uploads', async (c) => {
+    const data = z
+      .object({
+        name: z.string().min(1).max(200),
+        type: z.string().max(100),
+        data: z.string().max(28_000_000),
+      })
+      .strict()
+      .safeParse(await c.req.json());
+    if (!data.success)
+      return c.json({ error: 'Attach a file up to 20 MB.' }, 400);
+    const extension = uploadTypes[data.data.type];
+    if (!extension)
+      return c.json(
+        { error: 'Attach an image, text, CSV, JSON, Markdown or PDF file.' },
+        415,
+      );
+    const folder = resolve(dirname(platform.databasePath), 'uploads');
+    mkdirSync(folder, { recursive: true });
+    const base = basename(data.data.name, extname(data.data.name))
+      .replace(/[^a-z0-9._-]+/gi, '-')
+      .slice(0, 60);
+    const path = join(folder, `${Date.now()}-${base || 'file'}${extension}`);
+    writeFileSync(path, Buffer.from(data.data.data, 'base64'));
+    return c.json({ path, name: data.data.name, type: data.data.type }, 201);
   });
   app.put('/dots/:id', async (c) => {
     const data = dotSchema.safeParse(await c.req.json());

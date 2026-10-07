@@ -14,18 +14,23 @@ import { runLocalTurn } from './headless.js';
 import { setupStatus, type PlatformConfig } from './platform-config.js';
 import { validateRuntimeScope } from './runtime-scope.js';
 import { SqliteAgentRunner } from './local-runner.js';
+import { ModelRegistry } from './models.js';
+import { MemoryIndex } from './memory-index.js';
+import { starterTeam } from './team.js';
 // Local-only platform: the CopilotKit runtime runs in SSE mode and conversation
 // history lives in the workspace SQLite database. No Intelligence cloud service.
 export class Platform {
   readonly pages: PageService;
   readonly computers: ComputerService;
   readonly runner: SqliteAgentRunner;
+  readonly models: ModelRegistry;
+  readonly memory: MemoryIndex;
   readonly handler?: CopilotHonoApp;
   constructor(
     readonly store: Store,
     readonly workspace: WorkspaceStore,
     readonly config: PlatformConfig,
-    databasePath = ':memory:',
+    readonly databasePath = ':memory:',
   ) {
     this.computers = new ComputerService(
       workspace,
@@ -33,6 +38,27 @@ export class Platform {
       () => store.settings().paused,
     );
     this.runner = new SqliteAgentRunner(databasePath);
+    const ollama = config.baseUrl.replace(/\/v1\/?$/, '');
+    this.models = new ModelRegistry(workspace, config.model, config.baseUrl);
+    this.memory = new MemoryIndex(
+      databasePath,
+      ollama,
+      process.env.EMBED_MODEL || 'nomic-embed-text',
+    );
+    config.models = this.models;
+    config.memory = this.memory;
+    config.delegate = (request) => this.delegate(request);
+    workspace.seedTeam(starterTeam);
+    // Index finished turns into long-term memory in the background.
+    this.runner.onPersist = (threadId, messages) => {
+      const thread = workspace.conversations().find((t) => t.id === threadId);
+      if (thread)
+        void this.memory
+          .indexConversation(threadId, thread.title, messages)
+          .catch((error) =>
+            console.warn('Memory indexing skipped:', String(error)),
+          );
+    };
     this.pages = new PageService(workspace, () => {
       this.requireReady();
       return {
@@ -118,6 +144,53 @@ export class Platform {
       );
     }
     return this.handler.fetch(request);
+  }
+  /** Runs a task on another Dot in a sub-conversation linked to the parent. */
+  async delegate({
+    fromDot,
+    parentThreadId,
+    specialist,
+    task,
+    depth,
+    signal,
+  }: Parameters<NonNullable<PlatformConfig['delegate']>>[0]): Promise<string> {
+    const wanted = specialist.trim().toLowerCase();
+    const dot = this.workspace
+      .dots()
+      .find((d) => d.id === specialist || d.name.toLowerCase() === wanted);
+    if (!dot || dot.id === fromDot.id)
+      throw new Error(
+        `No specialist named "${specialist}". Available: ${this.workspace
+          .dots()
+          .filter((d) => d.id !== fromDot.id)
+          .map((d) => d.name)
+          .join(', ')}.`,
+      );
+    let threadId = this.workspace.delegationThread(parentThreadId, dot.id);
+    if (!threadId || (await this.runner.isRunning({ threadId }))) {
+      threadId = randomUUID();
+      this.workspace.bindThread(
+        threadId,
+        dot.id,
+        `${fromDot.name} → ${dot.name}: ${task.slice(0, 60)}`,
+      );
+      this.workspace.bindDelegation(parentThreadId, dot.id, threadId);
+    }
+    return runLocalTurn(
+      this.runner,
+      new DotAgent(
+        this.store,
+        this.workspace,
+        this.config,
+        dot.id,
+        false,
+        depth,
+      ),
+      threadId,
+      `Task from ${fromDot.name}:
+${task}`,
+      signal,
+    );
   }
   async turn(
     threadId: string,

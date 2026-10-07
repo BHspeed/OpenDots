@@ -64,7 +64,11 @@ export class McpTools {
     return pending;
   }
   // Tool names are prefixed with the server name to keep them unique.
-  async tools(check: () => void, signal: AbortSignal) {
+  async tools(
+    check: () => void,
+    signal: AbortSignal,
+    allow: (server: string, tool: string) => boolean = () => true,
+  ) {
     const enabled = Object.entries(this.servers).filter(([, s]) => s.enabled);
     const results = await Promise.allSettled(
       enabled.map(async ([name]) => ({ name, ...(await this.connect(name)) })),
@@ -75,31 +79,39 @@ export class McpTools {
         return [];
       }
       const { name, client, tools } = result.value;
-      return tools.map((tool) =>
-        toolDefinition({
-          name: `${name}__${tool.name}`,
-          description: tool.description ?? tool.name,
-          inputSchema: tool.inputSchema as JSONSchema,
-        }).server(async (input) => {
-          check();
-          const response = await client.callTool(
-            {
-              name: tool.name,
-              arguments: (input ?? {}) as Record<string, unknown>,
-            },
-            undefined,
-            // Confirmation dialogs wait on the owner, so allow a long call.
-            { signal, timeout: 600_000 },
-          );
-          const text = (response.content as { type: string; text?: string }[])
-            ?.filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('\n');
-          if (response.isError) throw new Error(text || 'Tool failed.');
-          return response.structuredContent ?? text;
-        }),
-      );
+      return tools
+        .filter((tool) => allow(name, tool.name))
+        .map((tool) =>
+          toolDefinition({
+            name: `${name}__${tool.name}`,
+            description: tool.description ?? tool.name,
+            inputSchema: tool.inputSchema as JSONSchema,
+          }).server(async (input) => {
+            check();
+            const response = await client.callTool(
+              {
+                name: tool.name,
+                arguments: (input ?? {}) as Record<string, unknown>,
+              },
+              undefined,
+              // Confirmation dialogs wait on the owner, so allow a long call.
+              { signal, timeout: 600_000 },
+            );
+            const text = (response.content as { type: string; text?: string }[])
+              ?.filter((part) => part.type === 'text')
+              .map((part) => part.text)
+              .join('\n');
+            if (response.isError) throw new Error(text || 'Tool failed.');
+            return response.structuredContent ?? text;
+          }),
+        );
     });
+  }
+  /** Names of configured servers other than the built-in local tools. */
+  extraServers() {
+    return Object.entries(this.servers)
+      .filter(([name, server]) => server.enabled && name !== 'localtools')
+      .map(([name]) => name);
   }
   async close() {
     const all = [...this.connections.values()];

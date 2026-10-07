@@ -6,11 +6,19 @@ export interface Settings {
   researchAllowed: boolean;
   memoryAllowed: boolean;
 }
+export type Trigger =
+  | { type: 'interval' }
+  | { type: 'daily'; time: string; days: number[] }
+  | { type: 'file'; folder: string; pattern: string };
 export interface Task {
   id: string;
   prompt: string;
   status: Status;
   intervalSeconds: number | null;
+  /** JSON-encoded Trigger; null means interval/manual. */
+  trigger?: string | null;
+  /** Context from the event that fired a trigger, used by the next run. */
+  pendingInput?: string | null;
   nextRunAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -81,6 +89,10 @@ export interface Dot {
   createdAt: number;
   learningContainerId?: string | null;
   skillDeliveryEnabled?: boolean;
+  /** Ollama model for this Dot; null uses the platform default. */
+  model?: string | null;
+  /** Granted tool groups (see shared/capabilities.ts). */
+  toolGroups?: string[];
 }
 export interface Conversation {
   id: string;
@@ -109,7 +121,15 @@ export interface SetupStatus {
   slack: string;
   missing: string[];
 }
+export interface ModelSettings {
+  defaultModel: string;
+  plannerModel: string;
+  visionModel: string;
+  available: string[];
+}
 export interface WorkspaceState {
+  models?: ModelSettings;
+  mcpGroups?: string[];
   spaces: Space[];
   dots: Dot[];
   conversations: Conversation[];

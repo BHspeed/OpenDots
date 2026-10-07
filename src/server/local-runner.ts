@@ -12,6 +12,8 @@ import { dirname } from 'node:path';
 // rehydrated on startup, so no conversation data leaves this machine.
 export class SqliteAgentRunner extends InMemoryAgentRunner {
   private db: DatabaseSync;
+  /** Called after each run is saved, e.g. to index it into long-term memory. */
+  onPersist?: (threadId: string, messages: Message[]) => void;
   constructor(path: string) {
     super({ maxRunsPerThread: 200 });
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -93,5 +95,6 @@ export class SqliteAgentRunner extends InMemoryAgentRunner {
         JSON.stringify(run.events),
         run.createdAt,
       );
+    this.onPersist?.(threadId, store.messagesSnapshot);
   }
 }

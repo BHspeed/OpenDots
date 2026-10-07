@@ -1,5 +1,16 @@
 import type { WebConfig } from './parallel.js';
 import type { McpTools } from './mcp-tools.js';
+import type { ModelRegistry } from './models.js';
+import type { MemoryIndex } from './memory-index.js';
+import type { Dot } from '../shared/types.js';
+export type Delegate = (request: {
+  fromDot: Dot;
+  parentThreadId: string;
+  specialist: string;
+  task: string;
+  depth: number;
+  signal: AbortSignal;
+}) => Promise<string>;
 import type { SetupStatus } from '../shared/types.js';
 export interface PlatformConfig extends WebConfig {
   intelligenceKey?: string;
@@ -24,6 +35,9 @@ export interface PlatformConfig extends WebConfig {
   runtimeUrl: string;
   ownerToken?: string;
   mcp?: McpTools;
+  models?: ModelRegistry;
+  memory?: MemoryIndex;
+  delegate?: Delegate;
   runTimeoutMs?: number;
   maxOutputTokens?: number;
 }

@@ -302,6 +302,54 @@ def detect_objects(path: str = "screen", confidence: float = 0.35, save_annotate
     return out
 
 
+# ---------------------------------------------------------------- web (opt-in)
+
+
+@mcp.tool()
+def web_search(query: str, max_results: int = 6) -> dict:
+    """Search the public web with DuckDuckGo. The query is sent to DuckDuckGo; nothing else leaves the PC."""
+    from ddgs import DDGS
+
+    # DuckDuckGo only: ddgs otherwise fans out to several search engines.
+    results = DDGS(timeout=20).text(
+        query, max_results=max(1, min(max_results, 10)), backend="duckduckgo"
+    )
+    return {
+        "query": query,
+        "results": [
+            {"title": r.get("title"), "url": r.get("href"), "snippet": r.get("body")}
+            for r in results
+        ],
+    }
+
+
+@mcp.tool()
+def fetch_page(url: str, max_chars: int = 12_000) -> dict:
+    """Read a public web page and return its main text."""
+    import re
+    from html import unescape
+
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("Only http(s) URLs can be fetched.")
+    response = httpx.get(
+        url,
+        follow_redirects=True,
+        timeout=20,
+        headers={"User-Agent": "Mozilla/5.0 (LocalTools reader)"},
+    )
+    response.raise_for_status()
+    html = response.text
+    title = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    html = re.sub(r"(?is)<(script|style|noscript|svg|nav|footer|header)[^>]*>.*?</\1>", " ", html)
+    text = unescape(re.sub(r"<[^>]+>", " ", html))
+    text = re.sub(r"\s+", " ", text).strip()
+    return {
+        "url": str(response.url),
+        "title": unescape(title.group(1).strip()) if title else "",
+        "text": text[: min(max_chars, 50_000)],
+    }
+
+
 # ---------------------------------------------------------------- PC control
 
 
