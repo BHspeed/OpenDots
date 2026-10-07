@@ -17,6 +17,7 @@ import { SqliteAgentRunner } from './local-runner.js';
 import { ModelRegistry } from './models.js';
 import { MemoryIndex } from './memory-index.js';
 import { starterTeam } from './team.js';
+import { LiveBrowser } from './browser-live.js';
 // Local-only platform: the CopilotKit runtime runs in SSE mode and conversation
 // history lives in the workspace SQLite database. No Intelligence cloud service.
 export class Platform {
@@ -25,6 +26,7 @@ export class Platform {
   readonly runner: SqliteAgentRunner;
   readonly models: ModelRegistry;
   readonly memory: MemoryIndex;
+  readonly browser: LiveBrowser;
   readonly handler?: CopilotHonoApp;
   constructor(
     readonly store: Store,
@@ -45,6 +47,7 @@ export class Platform {
       ollama,
       process.env.EMBED_MODEL || 'nomic-embed-text',
     );
+    this.browser = new LiveBrowser(undefined, undefined, config.mcp);
     config.models = this.models;
     config.memory = this.memory;
     config.delegate = (request) => this.delegate(request);
@@ -101,7 +104,9 @@ export class Platform {
       );
   }
   async start() {}
-  async stop() {}
+  async stop() {
+    await this.browser.close();
+  }
   async createConversation(dotId: string, title: string) {
     this.requireReady();
     if (!this.workspace.dot(dotId)) throw new Error('Dot not found.');

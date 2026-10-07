@@ -3,6 +3,7 @@ import {
   ArrowDownToLine,
   ArrowUpRight,
   BookOpen,
+  Globe,
   ExternalLink,
   Monitor,
   X,
@@ -11,6 +12,7 @@ import ReactMarkdown from 'react-markdown';
 import type { Dot, Result, Status } from '../shared/types';
 import { Mascot } from './Mascot';
 import { ComputerPanel } from './ComputerPanel';
+import { BrowserPanel } from './BrowserPanel';
 export function ResultPane({
   latest,
   status,
@@ -26,7 +28,9 @@ export function ResultPane({
   dotState: string;
   onClose: () => void;
 }) {
-  const [resultTab, setResultTab] = useState<'Brief' | 'Computer'>('Computer');
+  const [resultTab, setResultTab] = useState<'Brief' | 'Computer' | 'Browser'>(
+    'Browser',
+  );
   const [computerDotId, setComputerDotId] = useState(defaultDotId);
   const computerDot =
     dots.find((dot) => dot.id === computerDotId) ??
@@ -44,6 +48,12 @@ export function ResultPane({
             Brief
           </button>
           <button
+            className={resultTab === 'Browser' ? 'selected' : ''}
+            onClick={() => setResultTab('Browser')}
+          >
+            <Globe size={15} /> Browser
+          </button>
+          <button
             className={resultTab === 'Computer' ? 'selected' : ''}
             onClick={() => setResultTab('Computer')}
           >
@@ -58,7 +68,9 @@ export function ResultPane({
           <X size={16} />
         </button>
       </div>
-      {resultTab === 'Computer' ? (
+      {resultTab === 'Browser' ? (
+        <BrowserPanel />
+      ) : resultTab === 'Computer' ? (
         <>
           <label className="computer-dot-picker">
             Computer for

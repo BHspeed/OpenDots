@@ -18,6 +18,13 @@ from typing import Any, Awaitable, Callable
 
 PROFILE = Path(os.environ.get("LOCALTOOLS_BROWSER_PROFILE", Path(__file__).parent / "browser-profile"))
 CHANNELS = [c for c in os.environ.get("LOCALTOOLS_BROWSER", "chrome,msedge").split(",") if c]
+# Local-only DevTools port so OpenDots can stream a live view and relay the
+# owner's input into the same browser.
+CDP_PORT = int(os.environ.get("LOCALTOOLS_CDP_PORT", "9333"))
+# Present while the owner has taken control; agent actions wait for hand-back.
+TAKEOVER_FLAG = Path(
+    os.environ.get("LOCALTOOLS_TAKEOVER_FILE", Path(__file__).parent / "output" / "browser-takeover.flag")
+)
 RISKY = re.compile(
     r"\b(buy|pay|purchase|order|checkout|place order|send|post|publish|submit|delete|remove|"
     r"confirm|sign ?in|log ?in|sign ?up|register|subscribe|transfer|donate|accept|agree|install|download|upload)\b",
@@ -71,7 +78,12 @@ class Browser:
                 try:
                     self._context = await self._pw.chromium.launch_persistent_context(
                         str(PROFILE), channel=channel, headless=False, no_viewport=True,
-                        args=["--start-maximized"],
+                        args=[
+                            # Fixed size keeps the live view readable on ultrawide screens.
+                            f"--window-size={os.environ.get('LOCALTOOLS_BROWSER_SIZE', '1440,900')}",
+                            f"--remote-debugging-port={CDP_PORT}",
+                            "--remote-debugging-address=127.0.0.1",
+                        ],
                     )
                     break
                 except Exception as error:  # try the next installed browser
@@ -117,6 +129,17 @@ class Browser:
             raise LookupError(f"Unknown ref [{ref}]. Take a browser_snapshot and use a current ref.")
         return self._refs[ref], page.locator(f'[data-ld-ref="{ref}"]').first
 
+    async def highlight(self, locator) -> None:
+        """Outline the element briefly so the owner sees what the agent targets."""
+        try:
+            await locator.evaluate(
+                """el => { const old = el.style.outline; el.style.outline = '3px solid #ff5a36';
+                el.style.outlineOffset = '2px'; setTimeout(() => { el.style.outline = old; }, 1200); }"""
+            )
+            await asyncio.sleep(0.35)
+        except Exception:
+            pass
+
     async def settle(self) -> None:
         page = await self.page()
         try:
@@ -132,7 +155,15 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
     async def ask(action: str) -> None:
         await asyncio.to_thread(confirm, action)
 
+    def ensure_control() -> None:
+        if TAKEOVER_FLAG.exists():
+            raise PermissionError(
+                "The owner has taken control of the browser. Do not act; tell them you will "
+                "continue once they hand control back, or ask what they want."
+            )
+
     async def act(work: Callable[[], Awaitable[Any]], max_chars: int = 3000) -> dict:
+        ensure_control()
         async with browser.lock:
             result = await work()
             await browser.settle()
@@ -173,6 +204,7 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
     @tool()
     async def browser_click(ref: int) -> dict:
         """Click element [ref] from the latest snapshot. Buttons that submit, buy, send, delete or sign in ask the owner first."""
+        ensure_control()
         info, locator = await browser.element(ref)
         is_link = info["tag"] == "a" or info["role"] == "link"
         if not is_link and RISKY.search(info["name"] or ""):
@@ -180,6 +212,7 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
 
         async def work():
             await locator.scroll_into_view_if_needed(timeout=5000)
+            await browser.highlight(locator)
             await locator.click(timeout=10_000)
             return {"clicked": f"[{ref}] {info['name']}"}
 
@@ -188,6 +221,7 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
     @tool()
     async def browser_type(ref: int, text: str, submit: bool = False) -> dict:
         """Type text into field [ref] (replacing its content); submit=true presses Enter after. Asks the owner unless it is a search box."""
+        ensure_control()
         info, locator = await browser.element(ref)
         is_search = info["type"] == "search" or info["role"] in ("searchbox", "combobox") or re.search(
             r"search|query|find", info["name"] or "", re.I
@@ -199,6 +233,7 @@ def register(tool: Callable, confirm: Callable[[str], None], save_image: Callabl
             await ask(f"Type into \"{info['name'] or 'field'}\"{' and press Enter' if submit else ''}:\n\"{shown}\"")
 
         async def work():
+            await browser.highlight(locator)
             await locator.fill(text, timeout=10_000)
             if submit:
                 await locator.press("Enter")

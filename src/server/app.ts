@@ -1,4 +1,5 @@
 import { computerRoutes } from './computer-routes.js';
+import { browserRoutes } from './browser-routes.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { existsSync } from 'node:fs';
@@ -82,6 +83,7 @@ export function createApp({
     await next();
   });
   if (platform) app.route('/api', computerRoutes(platform.computers));
+  if (platform) app.route('/api', browserRoutes(platform.browser));
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   app.get('/api/state', (c) =>

@@ -514,7 +514,7 @@ export function App() {
             </button>
             <button
               className="icon-button"
-              aria-label={pane ? 'Hide computer' : 'Show computer'}
+              aria-label={pane ? 'Hide browser panel' : 'Show browser panel'}
               aria-expanded={pane}
               onClick={() => setPane(!pane)}
             >
@@ -890,7 +890,11 @@ export function App() {
     </div>
   );
   return configured ? (
-    <CopilotKitProvider runtimeUrl="/api/copilotkit" headers={authHeaders()}>
+    <CopilotKitProvider
+      runtimeUrl="/api/copilotkit"
+      headers={authHeaders()}
+      enableInspector={false}
+    >
       {content}
     </CopilotKitProvider>
   ) : (

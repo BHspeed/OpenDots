@@ -4018,3 +4018,82 @@ h3 {
   flex-wrap: wrap;
   gap: 4px 12px;
 }
+
+.browser-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  height: calc(100% - 52px);
+  min-height: 0;
+}
+.browser-empty {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--muted, #6b6b6b);
+}
+.browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.browser-toolbar input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+}
+.browser-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.browser-control.owner {
+  background: #ff5a36;
+  border-color: #ff5a36;
+  color: #fff;
+}
+.browser-view {
+  position: relative;
+  flex: 1;
+  min-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f4f3f1;
+  outline: none;
+}
+.browser-view.owner {
+  border: 2px solid #ff5a36;
+  cursor: pointer;
+}
+.browser-view img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+.browser-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.72);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
+.browser-badge.owner {
+  background: #ff5a36;
+}

@@ -113,6 +113,22 @@ export class McpTools {
       .filter(([name, server]) => server.enabled && name !== 'localtools')
       .map(([name]) => name);
   }
+  /** Calls one tool directly (used by the app itself, not by a model). */
+  async call(server: string, tool: string, args: Record<string, unknown>) {
+    if (!this.servers[server]?.enabled)
+      throw new Error(`MCP server ${server} is not configured.`);
+    const { client } = await this.connect(server);
+    const response = await client.callTool(
+      { name: tool, arguments: args },
+      undefined,
+      { timeout: 120_000 },
+    );
+    if (response.isError)
+      throw new Error(
+        (response.content as { text?: string }[])?.[0]?.text ?? 'Tool failed.',
+      );
+    return response;
+  }
   async close() {
     const all = [...this.connections.values()];
     this.connections.clear();
