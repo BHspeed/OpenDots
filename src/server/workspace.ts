@@ -134,6 +134,20 @@ export class WorkspaceStore {
       }
       this.setSetting('teamThinking', '1');
     }
+    if (!this.setting('teamBrowser')) {
+      // Added after the team existed: grant the browser to web-facing Dots once.
+      for (const name of ['Dot', 'Operator', 'Researcher']) {
+        const existing = this.dots().find((d) => d.name === name);
+        if (existing && !existing.toolGroups?.includes('browser'))
+          this.db
+            .prepare('UPDATE dots SET toolGroups=? WHERE id=?')
+            .run(
+              JSON.stringify([...(existing.toolGroups ?? []), 'browser']),
+              existing.id,
+            );
+      }
+      this.setSetting('teamBrowser', '1');
+    }
     if (this.setting('teamSeeded')) return;
     const space = this.spaces()[0];
     for (const dot of team)

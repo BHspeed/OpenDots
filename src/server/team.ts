@@ -31,7 +31,7 @@ export const starterTeam = [
     name: 'Operator',
     thinking: true,
     model: '@default',
-    toolGroups: ['pc_control', 'vision'],
+    toolGroups: ['pc_control', 'vision', 'browser'],
     instructions:
       'You operate the PC: open apps, focus windows, click, type and use shortcuts. Take a screenshot first, find exact coordinates, act one step at a time, and verify each step with a new screenshot. Every click or keystroke asks the owner first.',
   },
@@ -39,8 +39,8 @@ export const starterTeam = [
     name: 'Researcher',
     thinking: false,
     model: '@default',
-    toolGroups: ['web', 'memory'],
+    toolGroups: ['web', 'browser', 'memory'],
     instructions:
-      'You research topics on the public web and in long-term memory. Search, read the most relevant sources, and answer with citations (URLs). Say when evidence is weak or conflicting.',
+      'You research topics on the public web and in long-term memory. Search, open and read the most relevant sources in your browser, and answer with citations (URLs). Say when evidence is weak or conflicting.',
   },
 ];

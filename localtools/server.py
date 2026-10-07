@@ -27,6 +27,7 @@ from typing import Any
 os.environ.setdefault("YOLO_OFFLINE", "1")
 
 import functools
+import inspect
 import json
 import subprocess
 
@@ -68,14 +69,27 @@ def tool():
     """
 
     def register(fn):
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            try:
-                return fn(*args, **kwargs)
-            except ToolError:
-                raise
-            except Exception as error:
-                raise ToolError(f"{type(error).__name__}: {error}") from error
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def wrapper(*args, **kwargs):
+                try:
+                    return await fn(*args, **kwargs)
+                except ToolError:
+                    raise
+                except Exception as error:
+                    raise ToolError(f"{type(error).__name__}: {error}") from error
+
+        else:
+
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                try:
+                    return fn(*args, **kwargs)
+                except ToolError:
+                    raise
+                except Exception as error:
+                    raise ToolError(f"{type(error).__name__}: {error}") from error
 
         return mcp.tool()(wrapper)
 
@@ -545,6 +559,22 @@ def _app_path(exe: str) -> str | None:
     return None
 
 
+def _default_browser() -> str:
+    """Name of the app registered for https links, e.g. 'DuckDuckGo'."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+        ) as key:
+            prog_id = winreg.QueryValueEx(key, "ProgId")[0]
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{prog_id}\Application") as key:
+            return winreg.QueryValueEx(key, "ApplicationName")[0]
+    except OSError:
+        return ""
+
+
 @tool()
 def open_url(url: str, browser: str = "") -> dict:
     """Open a website. browser: '' (default browser), 'chrome', 'edge', 'firefox', 'brave' or 'duckduckgo'. Asks the owner first."""
@@ -557,9 +587,11 @@ def open_url(url: str, browser: str = "") -> dict:
         raise ValueError(f"Unknown browser '{browser}'. Use one of: {', '.join(BROWSERS)} or leave empty.")
     label = BROWSERS[choice][1] if choice else "the default browser"
     confirm(f"Open {url} in {label}")
-    if not choice:
+    default = _default_browser()
+    if not choice or BROWSERS[choice][1].lower() in default.lower():
+        # The default browser (even a Store app) receives URLs via the shell.
         os.startfile(url)  # type: ignore[attr-defined]
-        return {"opened": url, "browser": "default"}
+        return {"opened": url, "browser": default or "default"}
     exe, app_name = BROWSERS[choice]
     path = _app_path(exe) if exe else None
     if path:
@@ -601,6 +633,11 @@ def system_info() -> dict:
         "confirmations": CONFIRM,
         "home": str(HOME),
     }
+
+
+import browser  # noqa: E402  (registers the browser_* tools)
+
+browser.register(tool, confirm, _save)
 
 
 if __name__ == "__main__":

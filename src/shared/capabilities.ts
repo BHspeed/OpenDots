@@ -44,6 +44,26 @@ export const toolGroups = {
       'system_info',
     ],
   },
+  browser: {
+    label: 'Web browser',
+    description:
+      'Its own Chrome window: open sites, read, click, type, fill forms (asks before submitting).',
+    tools: [
+      'browser_open',
+      'browser_snapshot',
+      'browser_read',
+      'browser_click',
+      'browser_type',
+      'browser_select',
+      'browser_press',
+      'browser_scroll',
+      'browser_back',
+      'browser_tabs',
+      'browser_switch_tab',
+      'browser_screenshot',
+      'browser_close',
+    ],
+  },
   web: {
     label: 'Web search',
     description: 'Search DuckDuckGo and read public pages (queries leave PC).',

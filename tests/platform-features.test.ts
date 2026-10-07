@@ -23,6 +23,8 @@ describe('tool groups', () => {
     expect(allowsTool(['files'], 'localtools', 'mouse_click')).toBe(false);
     expect(allowsTool(['pc_control'], 'localtools', 'mouse_click')).toBe(true);
     expect(allowsTool([], 'localtools', 'unknown_tool')).toBe(false);
+    expect(groupsForTool('localtools', 'browser_click')).toEqual(['browser']);
+    expect(allowsTool(['web'], 'localtools', 'browser_type')).toBe(false);
   });
 });
 
@@ -31,6 +33,9 @@ describe('per-Dot models and tools', () => {
     const ws = new WorkspaceStore(':memory:', 'owner');
     expect(ws.dots()[0].toolGroups).toEqual(legacyToolGroups);
     ws.seedTeam(starterTeam);
+    expect(ws.dots().find((d) => d.name === 'Dot')!.toolGroups).toContain(
+      'browser',
+    );
     const names = ws.dots().map((dot) => dot.name);
     expect(names).toEqual(
       expect.arrayContaining(['Planner', 'Files', 'Vision']),

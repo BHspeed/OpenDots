@@ -24,3 +24,4 @@ localtools/.venv/
 localtools/**/__pycache__/
 *.pt
 localtools/output/
+localtools/browser-profile/
