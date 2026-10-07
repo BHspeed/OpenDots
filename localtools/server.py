@@ -294,8 +294,8 @@ def take_screenshot(monitor: int = 1) -> dict:
 
 
 @tool()
-def ask_vision(image, question: str, think: bool = True, max_side: int = 1600) -> str:
-    """Ask the local vision model a question about a PIL image."""
+def ask_vision(image, question: str, think: bool = True, max_side: int = 1600, model: str | None = None) -> str:
+    """Ask a local vision model (default: the vision role) a question about a PIL image."""
     image = image.copy()
     image.thumbnail((max_side, max_side))
     buffer = io.BytesIO()
@@ -303,7 +303,7 @@ def ask_vision(image, question: str, think: bool = True, max_side: int = 1600) -
     response = httpx.post(
         f"{OLLAMA_URL}/api/chat",
         json={
-            "model": VISION_MODEL,
+            "model": model or VISION_MODEL,
             "stream": False,
             "think": think,
             "options": {"temperature": 0},

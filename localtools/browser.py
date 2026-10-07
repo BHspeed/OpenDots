@@ -159,6 +159,11 @@ POINT_JS = r"""
     name: (t.getAttribute('aria-label') || t.innerText || t.value || t.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 80) }; }
 """
 GRID_COLS, GRID_ROWS = 12, 8
+# Model that points at screen targets. Qwen-VL models are trained for GUI grounding
+# (benchmark on a dense mock inbox: 7/8 correct vs 4/8 for numbered marks with Gemma).
+GROUNDING_MODEL = os.environ.get("LOCALTOOLS_GROUNDING_MODEL", "qwen3-vl:8b")
+# Point coordinates arrive normalized to 0-1000 (Qwen-VL convention).
+POINT_SCALE = 1000
 
 
 def draw_marks(image, marks, scale):
@@ -352,7 +357,8 @@ def register(
             return await browser.snapshot(max_chars=max_chars if max_chars > 0 else 5000)
 
     async def look(target: str):
-        """Screenshot with numbered marks; the vision model picks the target."""
+        """Find a target on screen: a grounding model points at it; numbered
+        marks and then a lettered grid are fallbacks."""
         from PIL import Image
         import io
 
@@ -362,6 +368,29 @@ def register(
         shot = Image.open(io.BytesIO(await page.screenshot()))
         viewport = await page.evaluate("() => [innerWidth, innerHeight]")
         scale = shot.width / max(1, viewport[0])
+        pointed = await asyncio.to_thread(
+            vision,
+            shot,
+            f"Point to: {target}. Answer only with JSON "
+            '{"point": [x, y]} using coordinates normalized to 0-1000 for this image.',
+            False,
+            1600,
+            GROUNDING_MODEL,
+        )
+        numbers = re.findall(r"-?\d+(?:\.\d+)?", pointed.split("</think>")[-1])
+        if len(numbers) >= 2:
+            x = min(max(float(numbers[0]), 0), POINT_SCALE) / POINT_SCALE * viewport[0]
+            y = min(max(float(numbers[1]), 0), POINT_SCALE) / POINT_SCALE * viewport[1]
+            # Report the marked element under the point (smallest box), if any.
+            inside = [m for m in marks if m["x"] <= x <= m["x"] + m["w"] and m["y"] <= y <= m["y"] + m["h"]]
+            ref = min(inside, key=lambda m: m["w"] * m["h"])["ref"] if inside else None
+            from PIL import ImageDraw
+
+            seen = shot.convert("RGB")
+            dot = ImageDraw.Draw(seen)
+            px, py = x * scale, y * scale
+            dot.ellipse([px - 12, py - 12, px + 12, py + 12], outline=(255, 40, 40), width=4)
+            return {"ref": ref, "x": x, "y": y, "image": save_image(seen, "pointed"), "how": "pointed"}
         marked = draw_marks(shot, marks, scale)
         path = save_image(marked, "marked")
         answer = await asyncio.to_thread(
@@ -375,7 +404,7 @@ def register(
         known = {m["ref"]: m for m in marks}
         if number in known:
             m = known[number]
-            return {"ref": number, "x": m["x"] + m["w"] / 2, "y": m["y"] + m["h"] / 2, "image": path}
+            return {"ref": number, "x": m["x"] + m["w"] / 2, "y": m["y"] + m["h"] / 2, "image": path, "how": "marks"}
         # Fallback: a lettered grid for things without a box.
         gridded = draw_grid(shot)
         cell = await asyncio.to_thread(
@@ -414,11 +443,7 @@ def register(
         async with browser.lock:
             spot = await look(target)
             page = await browser.page()
-            info = (
-                (await browser.element(spot["ref"]))[0]
-                if spot["ref"] is not None
-                else (await page.evaluate(POINT_JS, [spot["x"], spot["y"]]) or {"tag": "", "role": "", "name": ""})
-            )
+            info = await page.evaluate(POINT_JS, [spot["x"], spot["y"]]) or {"tag": "", "role": "", "name": ""}
         name = info.get("name") or ""
         is_link = info.get("tag") == "a" or info.get("role") == "link"
         if not is_link and RISKY.search(name):
@@ -427,7 +452,13 @@ def register(
         async def work():
             await mouse_to(spot["x"], spot["y"])
             await page.mouse.click(spot["x"], spot["y"])
-            where = f"[{spot['ref']}]" if spot["ref"] is not None else f"grid {spot.get('cell')}"
+            where = (
+                f"grid {spot.get('cell')}"
+                if spot.get("cell")
+                else f"[{spot['ref']}]"
+                if spot["ref"] is not None
+                else f"point ({round(spot['x'])}, {round(spot['y'])})"
+            )
             return {"clicked": f"{where} {name or target}", "looked_at": spot["image"]}
 
         return await act(work)
@@ -442,11 +473,7 @@ def register(
         async with browser.lock:
             spot = await look(target)
             page = await browser.page()
-            info = (
-                (await browser.element(spot["ref"]))[0]
-                if spot["ref"] is not None
-                else (await page.evaluate(POINT_JS, [spot["x"], spot["y"]]) or {"type": "", "role": "", "name": ""})
-            )
+            info = await page.evaluate(POINT_JS, [spot["x"], spot["y"]]) or {"type": "", "role": "", "name": ""}
         name = info.get("name") or target
         is_search = info.get("type") == "search" or info.get("role") in ("searchbox", "combobox") or re.search(
             r"search|query|find", name, re.I
