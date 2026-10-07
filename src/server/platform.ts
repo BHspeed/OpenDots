@@ -48,6 +48,10 @@ export class Platform {
       process.env.EMBED_MODEL || 'nomic-embed-text',
     );
     this.browser = new LiveBrowser(undefined, undefined, config.mcp);
+    config.browserPage = async () => {
+      const status = await this.browser.status();
+      return status.running ? status : undefined;
+    };
     config.models = this.models;
     config.memory = this.memory;
     config.delegate = (request) => this.delegate(request);

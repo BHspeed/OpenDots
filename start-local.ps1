@@ -20,4 +20,5 @@ if (-not (Test-Path localtools\.venv)) {
 }
 
 Start-Process 'http://127.0.0.1:5173'
-npm run dev:local
+# No auto-restart: editing files must never interrupt a running Dot.
+npm run local

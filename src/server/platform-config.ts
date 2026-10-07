@@ -38,6 +38,8 @@ export interface PlatformConfig extends WebConfig {
   models?: ModelRegistry;
   memory?: MemoryIndex;
   delegate?: Delegate;
+  /** Current page of the shared browser, if it is running. */
+  browserPage?: () => Promise<{ url: string; title: string } | undefined>;
   runTimeoutMs?: number;
   maxOutputTokens?: number;
 }
