@@ -6,7 +6,8 @@
     ],
     "env": {
       "PYTHONIOENCODING": "utf-8",
-      "LOCALTOOLS_VISION_MODEL": "gemma4-e4b:latest"
+      "LOCALTOOLS_VISION_MODEL": "gemma4-e4b:latest",
+      "LOCALTOOLS_GROUNDING_MODEL": "qwen3-vl:8b-instruct"
     }
   }
 }
