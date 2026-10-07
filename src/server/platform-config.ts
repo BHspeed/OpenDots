@@ -3,6 +3,7 @@ import type { McpTools } from './mcp-tools.js';
 import type { ModelRegistry } from './models.js';
 import type { MemoryIndex } from './memory-index.js';
 import type { SkillStore } from './skills.js';
+import type { DevWorkspace } from './dev-workspace.js';
 import type { Dot } from '../shared/types.js';
 export type Delegate = (request: {
   fromDot: Dot;
@@ -39,6 +40,7 @@ export interface PlatformConfig extends WebConfig {
   models?: ModelRegistry;
   memory?: MemoryIndex;
   skills?: SkillStore;
+  dev?: DevWorkspace;
   delegate?: Delegate;
   /** Current page of the shared browser, if it is running. */
   browserPage?: () => Promise<{ url: string; title: string } | undefined>;

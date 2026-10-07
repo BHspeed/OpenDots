@@ -190,5 +190,117 @@ export function platformTools(options: {
       }),
     );
   }
+  if (granted.includes('developer') && config.dev) {
+    const dev = config.dev;
+    const guard = async <T>(work: () => T | Promise<T>): Promise<T> => {
+      check();
+      return work();
+    };
+    tools.push(
+      defineTool({
+        name: 'dev_start',
+        description:
+          "Start a code change: creates a fresh branch and separate working copy of OpenDots' code. Nothing touches the running app.",
+        parameters: z.object({ title: z.string().min(3).max(80) }),
+        execute: ({ title }) => guard(() => dev.start(title)),
+      }),
+      defineTool({
+        name: 'dev_overview',
+        description:
+          'List the source files of OpenDots with their sizes, to find where to work.',
+        parameters: z.object({}),
+        execute: () => guard(() => ({ files: dev.overview() })),
+      }),
+      defineTool({
+        name: 'dev_list',
+        description: 'List a folder in the working copy, e.g. "src/client".',
+        parameters: z.object({ dir: z.string().max(200).optional() }),
+        execute: ({ dir }) => guard(() => ({ entries: dev.list(dir || '.') })),
+      }),
+      defineTool({
+        name: 'dev_read',
+        description:
+          'Read a source file with line numbers (optionally a line range).',
+        parameters: z.object({
+          path: z.string().min(1).max(300),
+          start: z.number().int().optional(),
+          end: z.number().int().optional(),
+        }),
+        execute: ({ path, start, end }) =>
+          guard(() => dev.read(path, start || 1, end || 0)),
+      }),
+      defineTool({
+        name: 'dev_search',
+        description:
+          'Search the code (src and tests) for text; returns file:line matches.',
+        parameters: z.object({ text: z.string().min(2).max(200) }),
+        execute: ({ text }) => guard(() => dev.search(text)),
+      }),
+      defineTool({
+        name: 'dev_edit',
+        description:
+          'Change code by replacing an exact block of text (copy it from dev_read without the line numbers) with new text. The block must appear exactly once.',
+        parameters: z.object({
+          path: z.string().min(1).max(300),
+          find: z.string().min(1),
+          replace: z.string(),
+        }),
+        execute: ({ path, find, replace }) =>
+          guard(() => dev.edit(path, find, replace)),
+      }),
+      defineTool({
+        name: 'dev_write',
+        description:
+          'Create a new file, or replace a whole file, in the working copy.',
+        parameters: z.object({
+          path: z.string().min(1).max(300),
+          content: z.string(),
+        }),
+        execute: ({ path, content }) => guard(() => dev.write(path, content)),
+      }),
+      defineTool({
+        name: 'dev_checks',
+        description:
+          'Run the type-check, lint and full test suite on the working copy. Returns PASS/FAIL per step with the failure output.',
+        parameters: z.object({}),
+        execute: () => guard(() => dev.checks()),
+      }),
+      defineTool({
+        name: 'dev_diff',
+        description: 'Show the current changes (diff) in the working copy.',
+        parameters: z.object({}),
+        execute: async () => ({
+          diff: (await guard(() => dev.diff())).slice(0, 20000),
+        }),
+      }),
+      defineTool({
+        name: 'dev_submit',
+        description:
+          'Finish: runs the checks, commits the branch and sends it to the owner for review. The owner applies or rejects it; tell them it is waiting in the Changes tab of the side panel.',
+        parameters: z.object({
+          title: z.string().min(3).max(120),
+          summary: z.string().min(10).max(2000),
+        }),
+        execute: async ({ title, summary }) => {
+          const review = await guard(() => dev.submit(title, summary));
+          return {
+            submitted: review.title,
+            checks_passed: review.passed,
+            next: 'Waiting for the owner to review it in the Changes tab.',
+          };
+        },
+      }),
+      defineTool({
+        name: 'dev_discard',
+        description:
+          'Throw away the change in progress (deletes its branch and working copy).',
+        parameters: z.object({}),
+        execute: async () => {
+          await guard(() => dev.discard());
+          return { discarded: true };
+        },
+      }),
+    );
+  }
   return tools;
 }

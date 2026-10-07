@@ -75,6 +75,24 @@ export const toolGroups = {
     description: 'Search past conversations and indexed folders.',
     tools: ['search_memory', 'index_folder'],
   },
+  developer: {
+    label: 'Code changes (Developer)',
+    description:
+      "Edit OpenDots' own code on a separate branch, run tests, and submit changes for your review.",
+    tools: [
+      'dev_start',
+      'dev_overview',
+      'dev_list',
+      'dev_read',
+      'dev_search',
+      'dev_edit',
+      'dev_write',
+      'dev_checks',
+      'dev_diff',
+      'dev_submit',
+      'dev_discard',
+    ],
+  },
   self_improve: {
     label: 'Self-improvement',
     description:

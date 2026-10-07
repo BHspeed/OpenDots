@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   BookOpen,
   Globe,
+  GitBranch,
   ExternalLink,
   Monitor,
   X,
@@ -13,6 +14,7 @@ import type { Dot, Result, Status } from '../shared/types';
 import { Mascot } from './Mascot';
 import { ComputerPanel } from './ComputerPanel';
 import { BrowserPanel } from './BrowserPanel';
+import { ChangesPanel } from './ChangesPanel';
 export function ResultPane({
   latest,
   status,
@@ -28,9 +30,9 @@ export function ResultPane({
   dotState: string;
   onClose: () => void;
 }) {
-  const [resultTab, setResultTab] = useState<'Brief' | 'Computer' | 'Browser'>(
-    'Browser',
-  );
+  const [resultTab, setResultTab] = useState<
+    'Brief' | 'Computer' | 'Browser' | 'Changes'
+  >('Browser');
   const [computerDotId, setComputerDotId] = useState(defaultDotId);
   const computerDot =
     dots.find((dot) => dot.id === computerDotId) ??
@@ -54,6 +56,12 @@ export function ResultPane({
             <Globe size={15} /> Browser
           </button>
           <button
+            className={resultTab === 'Changes' ? 'selected' : ''}
+            onClick={() => setResultTab('Changes')}
+          >
+            <GitBranch size={15} /> Changes
+          </button>
+          <button
             className={resultTab === 'Computer' ? 'selected' : ''}
             onClick={() => setResultTab('Computer')}
           >
@@ -70,6 +78,8 @@ export function ResultPane({
       </div>
       {resultTab === 'Browser' ? (
         <BrowserPanel />
+      ) : resultTab === 'Changes' ? (
+        <ChangesPanel />
       ) : resultTab === 'Computer' ? (
         <>
           <label className="computer-dot-picker">

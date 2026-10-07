@@ -122,6 +122,22 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       201,
     );
   });
+  // Developer Dot: code changes wait here until the owner applies or rejects.
+  app.get('/dev/reviews', (c) => c.json({ reviews: platform.dev.reviews() }));
+  app.post('/dev/reviews/:id/:action', async (c) => {
+    try {
+      const id = c.req.param('id');
+      const action = c.req.param('action');
+      if (action === 'apply') return c.json(await platform.dev.apply(id));
+      if (action === 'reject') return c.json(await platform.dev.reject(id));
+      return c.json({ error: 'Unknown action.' }, 400);
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : 'Failed.' },
+        409,
+      );
+    }
+  });
   // Self-improvement: learned skills and owner-approved instruction proposals.
   app.get('/dots/:id/skills', (c) => {
     const dot = platform.workspace.dot(c.req.param('id'));

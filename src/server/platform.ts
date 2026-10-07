@@ -17,6 +17,7 @@ import { SqliteAgentRunner } from './local-runner.js';
 import { ModelRegistry } from './models.js';
 import { MemoryIndex } from './memory-index.js';
 import { SkillStore } from './skills.js';
+import { DevWorkspace } from './dev-workspace.js';
 import { starterTeam } from './team.js';
 import { LiveBrowser } from './browser-live.js';
 // Local-only platform: the CopilotKit runtime runs in SSE mode and conversation
@@ -28,6 +29,7 @@ export class Platform {
   readonly models: ModelRegistry;
   readonly memory: MemoryIndex;
   readonly skills: SkillStore;
+  readonly dev: DevWorkspace;
   readonly browser: LiveBrowser;
   readonly handler?: CopilotHonoApp;
   constructor(
@@ -58,6 +60,8 @@ export class Platform {
     this.skills = new SkillStore(databasePath, (texts) =>
       this.memory.embed(texts),
     );
+    this.dev = new DevWorkspace(process.cwd(), databasePath);
+    config.dev = this.dev;
     config.memory = this.memory;
     config.skills = this.skills;
     config.delegate = (request) => this.delegate(request);

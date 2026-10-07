@@ -134,6 +134,27 @@ export class WorkspaceStore {
       }
       this.setSetting('teamThinking', '1');
     }
+    if (!this.setting('teamDeveloper')) {
+      // Added later: a Developer Dot that changes OpenDots' code on a branch,
+      // never live, and only merges after the owner approves the review.
+      if (!this.dots().some((d) => d.name === 'Developer')) {
+        const space = this.spaces()[0];
+        this.createDot(
+          space.id,
+          'Developer',
+          "You improve OpenDots' own code. Work in small steps: dev_start, look around with dev_overview / dev_search / dev_read, change code with dev_edit (exact text replacement) or dev_write, then dev_checks. Read every failure and fix it, then run dev_checks again. Only dev_submit when checks pass (or explain clearly why they cannot). Keep changes minimal and focused on the request. You cannot change permissions, approvals, tools or secrets; if a request needs that, explain it to the owner instead.",
+          false,
+          true,
+          [space.id],
+          null,
+          false,
+          'gptoss-20b-coder:latest',
+          ['developer', 'memory', 'self_improve'],
+          true,
+        );
+      }
+      this.setSetting('teamDeveloper', '1');
+    }
     if (!this.setting('teamSelfImprove')) {
       // Added later: let every existing Dot learn skills (approval still needed
       // for instruction changes).
