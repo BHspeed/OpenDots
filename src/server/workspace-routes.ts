@@ -122,6 +122,39 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       201,
     );
   });
+  // Self-improvement: learned skills and owner-approved instruction proposals.
+  app.get('/dots/:id/skills', (c) => {
+    const dot = platform.workspace.dot(c.req.param('id'));
+    if (!dot) return c.json({ error: 'Dot not found.' }, 404);
+    return c.json({
+      skills: platform.skills.list(dot.id),
+      proposal: platform.skills.pending(dot.id) ?? null,
+    });
+  });
+  app.delete('/skills/:id', (c) =>
+    platform.skills.delete(c.req.param('id'))
+      ? c.json({ ok: true })
+      : c.json({ error: 'Skill not found.' }, 404),
+  );
+  app.post('/proposals/:id/:action', (c) => {
+    const action = c.req.param('action');
+    const proposal = platform.skills.proposal(c.req.param('id'));
+    if (!proposal || proposal.status !== 'pending')
+      return c.json({ error: 'No pending proposal.' }, 404);
+    if (action === 'apply') {
+      const dot = platform.workspace.dot(proposal.dotId);
+      if (!dot) return c.json({ error: 'Dot not found.' }, 404);
+      // Only the instructions change; tools, model and access stay as set.
+      platform.workspace.updateDot(dot.id, {
+        ...dot,
+        instructions: proposal.instructions,
+      });
+      platform.skills.resolve(proposal.id, 'applied');
+    } else if (action === 'dismiss')
+      platform.skills.resolve(proposal.id, 'dismissed');
+    else return c.json({ error: 'Unknown action.' }, 400);
+    return c.json({ ok: true });
+  });
   app.patch('/models', async (c) => {
     const data = z
       .object({

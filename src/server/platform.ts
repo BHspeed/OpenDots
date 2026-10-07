@@ -16,6 +16,7 @@ import { validateRuntimeScope } from './runtime-scope.js';
 import { SqliteAgentRunner } from './local-runner.js';
 import { ModelRegistry } from './models.js';
 import { MemoryIndex } from './memory-index.js';
+import { SkillStore } from './skills.js';
 import { starterTeam } from './team.js';
 import { LiveBrowser } from './browser-live.js';
 // Local-only platform: the CopilotKit runtime runs in SSE mode and conversation
@@ -26,6 +27,7 @@ export class Platform {
   readonly runner: SqliteAgentRunner;
   readonly models: ModelRegistry;
   readonly memory: MemoryIndex;
+  readonly skills: SkillStore;
   readonly browser: LiveBrowser;
   readonly handler?: CopilotHonoApp;
   constructor(
@@ -53,7 +55,11 @@ export class Platform {
       return status.running ? status : undefined;
     };
     config.models = this.models;
+    this.skills = new SkillStore(databasePath, (texts) =>
+      this.memory.embed(texts),
+    );
     config.memory = this.memory;
+    config.skills = this.skills;
     config.delegate = (request) => this.delegate(request);
     workspace.seedTeam(starterTeam);
     // Index finished turns into long-term memory in the background.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { DotLearning } from './DotLearning';
 import type { Dot, Memory, State, WorkspaceState } from '../shared/types';
 import {
   allToolGroups,
@@ -414,6 +415,9 @@ export function WorkspaceDialog({
                 </span>
               </label>
             </fieldset>
+          )}
+          {dialog.type === 'dot' && dialog.dot && (
+            <DotLearning dotId={dialog.dot.id} onApplied={setText} />
           )}
           {dialog.type === 'dot' && (
             <fieldset className="space-access-fields">

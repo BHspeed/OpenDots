@@ -75,6 +75,17 @@ export const toolGroups = {
     description: 'Search past conversations and indexed folders.',
     tools: ['search_memory', 'index_folder'],
   },
+  self_improve: {
+    label: 'Self-improvement',
+    description:
+      'Save procedures that worked as skills, and propose instruction changes for your approval.',
+    tools: [
+      'save_skill',
+      'read_skill',
+      'list_skills',
+      'propose_instruction_change',
+    ],
+  },
   delegation: {
     label: 'Delegate to Dots',
     description: 'Hand tasks to other specialist Dots and use their answers.',

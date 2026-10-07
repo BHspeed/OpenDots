@@ -105,3 +105,70 @@ describe('long-term memory', () => {
     expect(chunk('x'.repeat(3000)).length).toBe(3);
   });
 });
+
+describe('self-improvement', () => {
+  it('saves, updates and recalls skills, and keeps instruction changes pending', async () => {
+    const { SkillStore } = await import('../src/server/skills.js');
+    const embed = async (texts: string[]) =>
+      texts.map((text) =>
+        Float32Array.from([
+          /wiki/i.test(text) ? 1 : 0,
+          /file/i.test(text) ? 1 : 0,
+          0.1,
+        ]),
+      );
+    const skills = new SkillStore(':memory:', embed);
+    await skills.save({
+      dotId: 'a',
+      name: 'Search Wikipedia',
+      whenToUse: 'wiki lookups',
+      steps: 'v1',
+    });
+    await skills.save({
+      dotId: 'a',
+      name: 'search wikipedia',
+      whenToUse: 'wiki lookups',
+      steps: 'v2',
+    });
+    await skills.save({
+      dotId: null,
+      name: 'Organize files',
+      whenToUse: 'file cleanup',
+      steps: 's',
+    });
+    await skills.save({
+      dotId: 'b',
+      name: 'Private',
+      whenToUse: 'other dot',
+      steps: 's',
+    });
+    // Same name updates instead of duplicating; shared skills are visible to all.
+    expect(
+      skills
+        .list('a')
+        .map((s) => s.name)
+        .sort(),
+    ).toEqual(['Organize files', 'Search Wikipedia']);
+    expect(skills.get('a', 'SEARCH WIKIPEDIA')?.steps).toBe('v2');
+    const [top] = await skills.relevant('a', 'look this up on wikipedia');
+    expect(top.name).toBe('Search Wikipedia');
+    expect(await skills.relevant('a', 'unrelated cooking question')).toEqual(
+      [],
+    );
+    // Only one pending proposal per Dot; resolving it clears it.
+    skills.propose(
+      'a',
+      'old proposal text that is long enough',
+      'first reason',
+    );
+    const latest = skills.propose(
+      'a',
+      'new instructions that are long enough',
+      'better',
+    );
+    expect(skills.pending('a')?.id).toBe(latest.id);
+    skills.resolve(latest.id, 'dismissed');
+    expect(skills.pending('a')).toBeUndefined();
+    skills.close();
+  });
+});

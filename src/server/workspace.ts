@@ -134,6 +134,19 @@ export class WorkspaceStore {
       }
       this.setSetting('teamThinking', '1');
     }
+    if (!this.setting('teamSelfImprove')) {
+      // Added later: let every existing Dot learn skills (approval still needed
+      // for instruction changes).
+      for (const existing of this.dots())
+        if (!existing.toolGroups?.includes('self_improve'))
+          this.db
+            .prepare('UPDATE dots SET toolGroups=? WHERE id=?')
+            .run(
+              JSON.stringify([...(existing.toolGroups ?? []), 'self_improve']),
+              existing.id,
+            );
+      this.setSetting('teamSelfImprove', '1');
+    }
     if (!this.setting('teamBrowser')) {
       // Added after the team existed: grant the browser to web-facing Dots once.
       for (const name of ['Dot', 'Operator', 'Researcher']) {

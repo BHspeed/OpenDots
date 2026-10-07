@@ -64,7 +64,8 @@ export class MemoryIndex {
       CREATE INDEX IF NOT EXISTS memory_ref ON memory_chunks(ref);
       CREATE TABLE IF NOT EXISTS memory_files(path TEXT PRIMARY KEY, mtime INTEGER NOT NULL);`);
   }
-  private async embed(texts: string[]): Promise<Float32Array[]> {
+  /** Embeds texts with the local embedding model (also used by skills). */
+  async embed(texts: string[]): Promise<Float32Array[]> {
     if (this.embedder)
       return (await this.embedder(texts)).map((v) => Float32Array.from(v));
     const response = await fetch(`${this.embedUrl}/api/embed`, {

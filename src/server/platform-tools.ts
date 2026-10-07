@@ -112,5 +112,83 @@ export function platformTools(options: {
       }),
     );
   }
+  if (granted.includes('self_improve') && config.skills) {
+    const skills = config.skills;
+    tools.push(
+      defineTool({
+        name: 'save_skill',
+        description:
+          'Save a procedure that worked so you (or every Dot, if shared) do it right next time. Use after finishing a multi-step task, or when the owner corrects you. Saving the same name updates it. Write concrete, reusable steps (which tools, in what order, what to watch for), not a story of this conversation.',
+        parameters: z.object({
+          name: z
+            .string()
+            .min(3)
+            .max(80)
+            .describe('Short title, e.g. "Search Wikipedia"'),
+          when_to_use: z.string().min(5).max(500),
+          steps: z.string().min(10).max(4000),
+          shared: z
+            .boolean()
+            .optional()
+            .describe('true to share with all Dots (general know-how)'),
+        }),
+        execute: async ({ name, when_to_use, steps, shared }) => {
+          check();
+          const skill = await skills.save({
+            dotId: shared ? null : dot.id,
+            name,
+            whenToUse: when_to_use,
+            steps,
+          });
+          return { saved: skill.name, shared: skill.dotId === null };
+        },
+      }),
+      defineTool({
+        name: 'list_skills',
+        description:
+          'List the skills you have learned (names and when to use them).',
+        parameters: z.object({}),
+        execute: async () => ({
+          skills: skills.list(dot.id).map((skill) => ({
+            name: skill.name,
+            when_to_use: skill.whenToUse,
+            shared: skill.dotId === null,
+          })),
+        }),
+      }),
+      defineTool({
+        name: 'read_skill',
+        description: 'Read the full steps of a learned skill by name.',
+        parameters: z.object({ name: z.string().min(1).max(80) }),
+        execute: async ({ name }) => {
+          const skill = skills.get(dot.id, name);
+          if (!skill)
+            throw new Error(`No skill named "${name}". Use list_skills.`);
+          return {
+            name: skill.name,
+            when_to_use: skill.whenToUse,
+            steps: skill.steps,
+          };
+        },
+      }),
+      defineTool({
+        name: 'propose_instruction_change',
+        description:
+          'Propose new role instructions for yourself when your current ones keep leading you wrong. The owner must approve it in your settings; nothing changes until then. Provide the complete new instructions and why.',
+        parameters: z.object({
+          new_instructions: z.string().min(20).max(2000),
+          reason: z.string().min(10).max(1000),
+        }),
+        execute: async ({ new_instructions, reason }) => {
+          check();
+          skills.propose(dot.id, new_instructions, reason);
+          return {
+            status:
+              'Proposal saved. Tell the owner it is waiting for their approval in your Dot settings.',
+          };
+        },
+      }),
+    );
+  }
   return tools;
 }
