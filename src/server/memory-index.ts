@@ -164,7 +164,11 @@ export class MemoryIndex {
     await walk(root);
     return { files, chunks };
   }
-  async search(query: string, limit = 6): Promise<MemoryHit[]> {
+  async search(
+    query: string,
+    limit = 6,
+    excludedRefs: ReadonlySet<string> = new Set(),
+  ): Promise<MemoryHit[]> {
     const [vector] = await this.embed([query]);
     const rows = this.db
       .prepare('SELECT source, ref, text, embedding FROM memory_chunks')
@@ -175,6 +179,7 @@ export class MemoryIndex {
       embedding: Uint8Array;
     }[];
     return rows
+      .filter((row) => !excludedRefs.has(row.ref))
       .map((row) => ({
         source: row.source,
         ref: row.ref,

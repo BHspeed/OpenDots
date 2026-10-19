@@ -43,28 +43,69 @@ it('edits on a branch, refuses protected files, and only merges on apply', async
     '-m',
     'init',
   );
-  const dev = new DevWorkspace(repo, ':memory:', join(root, 'app-dev'));
+  let dev = new DevWorkspace(
+    repo,
+    join(root, 'reviews.sqlite'),
+    join(root, 'app-dev'),
+  );
   try {
     // Checks are the real project's job; stub them for this throwaway repo.
     dev.checks = async () => ({ text: '## Tests: PASS', passed: true });
-    await dev.start('fix add');
+    writeFileSync(join(repo, 'uncommitted.txt'), 'owner work');
+    await expect(dev.start('stale baseline')).rejects.toThrow(/uncommitted/);
+    rmSync(join(repo, 'uncommitted.txt'));
+    await dev.withSession('owner-thread', () => dev.start('fix add'));
+    await expect(
+      dev.withSession('other-thread', () => dev.discard()),
+    ).rejects.toThrow(/Another conversation/);
+    await expect(
+      dev.withSession('owner-thread', () => dev.start('replacement')),
+    ).rejects.toThrow(/unfinished/);
     expect(() => dev.write('src/shared/capabilities.ts', 'hacked')).toThrow(
       /protected/,
     );
     expect(() => dev.read('../secret.txt')).toThrow(/outside/);
+    expect(() => dev.write('SRC/SHARED/CAPABILITIES.TS', 'bypass')).toThrow(
+      /protected/,
+    );
+    expect(() => dev.write(join(root, 'escape.ts'), 'bypass')).toThrow(
+      /outside/,
+    );
     dev.edit('src/math.ts', 'a - b', 'a + b');
     // The live checkout is untouched until apply.
     expect(readFileSync(join(repo, 'src', 'math.ts'), 'utf8')).toContain(
       'a - b',
     );
-    const review = await dev.submit(
-      'Fix add',
-      'add() subtracted instead of adding.',
+    dev.checks = async () => ({ text: '## Tests: FAIL', passed: false });
+    await expect(dev.submit('Broken', 'Do not publish')).rejects.toThrow(
+      /Checks failed/,
     );
+    expect(dev.reviews()).toHaveLength(0);
+    dev.close();
+    dev = new DevWorkspace(
+      repo,
+      join(root, 'reviews.sqlite'),
+      join(root, 'app-dev'),
+    );
+    expect(dev.status()).toMatchObject({
+      active: true,
+      sourceThreadId: 'owner-thread',
+    });
+    await expect(
+      dev.withSession('other-thread', () => dev.discard()),
+    ).rejects.toThrow(/Another conversation/);
+    dev.checks = async () => ({ text: '## Tests: PASS', passed: true });
+    const review = await dev.withSession('owner-thread', () =>
+      dev.submit('Fix add', 'add() subtracted instead of adding.'),
+    );
+    expect(review.sourceThreadId).toBe('owner-thread');
     expect(review).toMatchObject({ passed: true, status: 'pending' });
     expect(review.diff).toContain(
       '+export const add = (a: number, b: number) => a + b;',
     );
+    writeFileSync(join(repo, 'uncommitted.txt'), 'owner work');
+    await expect(dev.apply(review.id)).rejects.toThrow(/local changes/);
+    rmSync(join(repo, 'uncommitted.txt'));
     await dev.apply(review.id);
     expect(readFileSync(join(repo, 'src', 'math.ts'), 'utf8')).toContain(
       'a + b',
@@ -78,6 +119,7 @@ it('edits on a branch, refuses protected files, and only merges on apply', async
       'installed',
     );
   } finally {
+    dev.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

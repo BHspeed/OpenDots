@@ -5,14 +5,14 @@ import { Runner } from '../src/server/runner.js';
 import type { Config } from '../src/server/research.js';
 const stores: Store[] = [];
 const config: Config = { mode: 'sample', baseUrl: 'https://api.openai.com/v1' };
-function fixture(token?: string) {
+function fixture(token?: string, origin?: string) {
   const store = new Store(':memory:');
   stores.push(store);
   const runner = new Runner(store, config);
   return {
     store,
     runner,
-    app: createApp({ store, runner, config, ownerToken: token }),
+    app: createApp({ store, runner, config, ownerToken: token, origin }),
   };
 }
 const json = (body: unknown) => ({
@@ -22,6 +22,66 @@ const json = (body: unknown) => ({
 });
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 describe('API boundaries', () => {
+  it('lets a long chat through but keeps other requests small', async () => {
+    const { app } = fixture();
+    const big = JSON.stringify({ messages: ['x'.repeat(2_000_000)] });
+    const post = (path: string) =>
+      app.request(`http://127.0.0.1${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(big.length),
+        },
+        body: big,
+      });
+    // A night of trading made the conversation about 1.1 MB.
+    expect((await post('/api/copilotkit')).status).not.toBe(413);
+    expect((await post('/api/memories')).status).toBe(413);
+  });
+  it('accepts same-port loopback aliases but rejects unrelated origins', async () => {
+    const { app } = fixture(undefined, 'http://127.0.0.1:5173');
+    for (const origin of [
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://[::1]:5173',
+    ]) {
+      expect(
+        (await app.request('/api/state', { headers: { Origin: origin } }))
+          .status,
+      ).toBe(200);
+    }
+    for (const origin of [
+      'http://localhost:5174',
+      'https://localhost:5173',
+      'http://localhost.evil.example:5173',
+      'https://evil.example',
+      'null',
+      'http://localhost:5173/path',
+    ]) {
+      expect(
+        (await app.request('/api/state', { headers: { Origin: origin } }))
+          .status,
+      ).toBe(403);
+    }
+    expect(
+      (
+        await app.request('/api/state', {
+          headers: {
+            Origin: 'http://localhost:5173',
+            'Sec-Fetch-Site': 'cross-site',
+          },
+        })
+      ).status,
+    ).toBe(403);
+    const remote = fixture(undefined, 'https://dots.example');
+    expect(
+      (
+        await remote.app.request('/api/state', {
+          headers: { Origin: 'http://localhost:5173' },
+        })
+      ).status,
+    ).toBe(403);
+  });
   it('requires owner token for state and mutations when configured', async () => {
     const { app } = fixture('private-token');
     expect((await app.request('/api/state')).status).toBe(401);

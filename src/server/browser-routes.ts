@@ -87,6 +87,98 @@ export function browserRoutes(live: LiveBrowser) {
     live.setTakeover(body.data.on);
     return c.json(await live.status());
   });
+  // Owner teaching from the browser panel: start, then the owner clicks the
+  // control in the live view and confirms it in the page; finish saves it.
+  app.post('/browser/teach', async (c) => {
+    const body = z
+      .object({
+        name: z.string().trim().min(1).max(160),
+        kind: z.enum(['button', 'region']).default('button'),
+        // Let the owner's first clicks through, for buttons that appear only
+        // after another click (e.g. Double Up after BUY).
+        afterClicks: z.number().int().min(0).max(3).default(0),
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!body.success)
+      return c.json({ error: 'Name the button you want to teach.' }, 400);
+    try {
+      return c.json(
+        await live.teachStart(
+          body.data.name,
+          body.data.kind,
+          body.data.kind === 'button' ? body.data.afterClicks : 0,
+        ),
+      );
+    } catch (error) {
+      return c.json({ error: failure(error) }, 409);
+    }
+  });
+  app.get('/browser/teach', async (c) => {
+    try {
+      return c.json(await live.teachStatus());
+    } catch (error) {
+      return c.json({ error: failure(error) }, 409);
+    }
+  });
+  app.post('/browser/teach/finish', async (c) => {
+    try {
+      return c.json(await live.teachFinish());
+    } catch (error) {
+      return c.json({ error: failure(error) }, 409);
+    }
+  });
+  app.post('/browser/teach/cancel', async (c) => {
+    try {
+      return c.json(await live.teachCancel());
+    } catch (error) {
+      return c.json({ error: failure(error) }, 409);
+    }
+  });
+  app.get('/browser/targets', async (c) => {
+    try {
+      return c.json(await live.targets());
+    } catch (error) {
+      return c.json({ error: failure(error) }, 502);
+    }
+  });
+  app.post('/browser/targets/:id/forget', async (c) => {
+    try {
+      return c.json(await live.forgetTarget(c.req.param('id')));
+    } catch (error) {
+      return c.json({ error: failure(error) }, 409);
+    }
+  });
+  // Pairs dashboard under the live view: the latest scan, a new scan, a switch.
+  app.get('/browser/pairs', (c) => c.json(live.pairScan()));
+  app.post('/browser/pairs/scan', async (c) => {
+    const body = z
+      .object({
+        count: z.number().int().min(2).max(20).optional(),
+        market: z.enum(['otc', 'real', 'same']).optional(),
+      })
+      .safeParse(await c.req.json().catch(() => ({})));
+    try {
+      return c.json(
+        await live.scanPairs(
+          body.success ? body.data.count : undefined,
+          body.success ? body.data.market : undefined,
+        ),
+      );
+    } catch (error) {
+      return c.json({ error: failure(error) }, 409);
+    }
+  });
+  app.post('/browser/pairs/choose', async (c) => {
+    const body = z
+      .object({ name: z.string().min(1).max(60) })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json({ error: 'Give a pair name.' }, 400);
+    try {
+      return c.json(await live.choosePair(body.data.name));
+    } catch (error) {
+      return c.json({ error: failure(error) }, 409);
+    }
+  });
   app.post('/browser/input', async (c) => {
     const body = inputSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: 'Invalid input event.' }, 400);

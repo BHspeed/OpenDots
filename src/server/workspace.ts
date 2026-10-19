@@ -409,6 +409,12 @@ export class WorkspaceStore {
       );
     return value;
   }
+  unbindThread(id: string) {
+    this.db
+      .prepare('DELETE FROM thread_bindings WHERE id=? AND ownerId=?')
+      .run(id, this.ownerId);
+    this.db.prepare('DELETE FROM task_threads WHERE threadId=?').run(id);
+  }
   requireThread(id: string, dotId?: string): Conversation {
     const thread = this.conversations().find((thread) => thread.id === id);
     if (!thread || (dotId && thread.dotId !== dotId))

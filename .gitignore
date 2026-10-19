@@ -25,3 +25,6 @@ localtools/**/__pycache__/
 *.pt
 localtools/output/
 localtools/browser-profile/
+localtools/vendor/
+localtools/.jev-deps/
+localtools/jev-models/

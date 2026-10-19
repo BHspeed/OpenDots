@@ -256,6 +256,23 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       201,
     );
   });
+  app.get('/conversations/running', async (c) =>
+    c.json({ ids: await platform.runningConversations() }),
+  );
+  app.delete('/conversations/:id', async (c) => {
+    try {
+      await platform.deleteConversation(c.req.param('id'));
+      return c.json({ deleted: true });
+    } catch (error) {
+      return c.json(
+        {
+          error:
+            error instanceof Error ? error.message : 'Could not delete it.',
+        },
+        404,
+      );
+    }
+  });
   app.get('/conversations/:id/capture', (c) =>
     c.json(platform.workspace.capture(c.req.param('id'))),
   );

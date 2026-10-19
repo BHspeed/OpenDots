@@ -2,8 +2,9 @@
 
 Every tool runs on this machine. Vision uses the local Ollama model; detection
 uses YOLO on the GPU. Actions that change files or drive the mouse/keyboard ask
-the person through a native Windows Yes/No dialog first (set
-LOCALTOOLS_CONFIRM=0 to disable, only if you trust every caller).
+the person through a native Windows Yes/No dialog first. The owner can switch
+to unattended actions in OpenDots Settings; the policy is read on each action.
+LOCALTOOLS_CONFIRM supplies the default when no saved policy exists.
 
 Run:  python server.py            (stdio, for OpenDots / Claude Code)
       python server.py --http     (streamable HTTP on 127.0.0.1:8765, for AJ)
@@ -22,6 +23,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from confirmation_policy import confirmations_required
 
 # Keep Ultralytics fully offline: no analytics sync or update checks.
 os.environ.setdefault("YOLO_OFFLINE", "1")
@@ -45,6 +47,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 VISION_MODEL = os.environ.get("LOCALTOOLS_VISION_MODEL", "qwen3-vl:8b")
 YOLO_MODEL = os.environ.get("LOCALTOOLS_YOLO_MODEL", "yolo11n.pt")
 CONFIRM = os.environ.get("LOCALTOOLS_CONFIRM", "1") != "0"
+CONFIRMATION_POLICY = Path(os.environ.get("LOCALTOOLS_CONFIRMATION_POLICY", Path(__file__).parent.parent / "data" / "confirmation-policy.json")).resolve()
 OUTPUT_DIR = Path(
     os.environ.get("LOCALTOOLS_OUTPUT", Path(__file__).parent / "output")
 )
@@ -100,8 +103,8 @@ def tool():
 
 
 def confirm(action: str) -> None:
-    """Ask the person before a risky action. Raises if declined."""
-    if not CONFIRM:
+    """Honor the owner's live confirmation mode. Raises if a prompt is declined."""
+    if not confirmations_required(CONFIRMATION_POLICY, CONFIRM):
         return
     MB_YESNO, MB_ICONQUESTION, MB_TOPMOST, MB_SETFOREGROUND = 0x4, 0x20, 0x40000, 0x10000
     IDYES = 6
@@ -117,6 +120,8 @@ def confirm(action: str) -> None:
 
 def safe_path(path: str) -> Path:
     resolved = Path(path).expanduser().resolve()
+    if resolved == CONFIRMATION_POLICY:
+        raise PermissionError("Confirmation settings are controlled through the OpenDots owner settings.")
     if not any(resolved == root or root in resolved.parents for root in ROOTS):
         raise PermissionError(
             f"{resolved} is outside the allowed roots: {', '.join(map(str, ROOTS))}"
@@ -294,7 +299,7 @@ def take_screenshot(monitor: int = 1) -> dict:
 
 
 @tool()
-def ask_vision(image, question: str, think: bool = True, max_side: int = 1600, model: str | None = None) -> str:
+def ask_vision(image, question: str, think: bool = False, max_side: int = 1600, model: str | None = None) -> str:
     """Ask a local vision model (default: the vision role) a question about a PIL image."""
     image = image.copy()
     image.thumbnail((max_side, max_side))
@@ -322,11 +327,13 @@ def ask_vision(image, question: str, think: bool = True, max_side: int = 1600, m
 
 
 @tool()
-def describe_image(path: str, question: str = "Describe this image in detail.") -> dict:
+def describe_image(path: str, question: str = "Describe this image in detail.", think: bool = False) -> dict:
     """Understand an image with the local vision model: describe it, read its text (OCR), answer questions.
-    path can be an image file or 'screen' for the current screen."""
+    path can be an image file or 'screen' for the current screen.
+    Defaults to direct observation without extended reasoning. Set think=True only
+    for complex interpretation; this may take longer. Unreadable details are unknown."""
     question = question or "Describe this image in detail."
-    answer = ask_vision(_load_image(path or "screen"), question)
+    answer = ask_vision(_load_image(path or "screen"), question, think=think)
     return {"model": VISION_MODEL, "answer": answer}
 
 
@@ -640,7 +647,7 @@ def system_info() -> dict:
         "allowed_roots": [str(r) for r in ROOTS],
         "vision_model": VISION_MODEL,
         "yolo_model": YOLO_MODEL,
-        "confirmations": CONFIRM,
+        "confirmations": confirmations_required(CONFIRMATION_POLICY, CONFIRM),
         "home": str(HOME),
     }
 

@@ -1,5 +1,11 @@
 import { chromium, type Browser, type CDPSession, type Page } from 'playwright';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { McpTools } from './mcp-tools.js';
 import { execFileSync, spawn } from 'node:child_process';
@@ -146,6 +152,132 @@ export class LiveBrowser {
       }
     }
     return pages[0];
+  }
+  /** One local-tools browser tool run for the owner (no model involved), as JSON. */
+  private async tool(name: string, args: Record<string, unknown> = {}) {
+    if (!this.mcp) throw new Error('Local tools are not configured.');
+    const response = (await this.mcp.call('localtools', name, args)) as {
+      structuredContent?: Record<string, unknown>;
+      content?: { type: string; text?: string }[];
+    };
+    if (response.structuredContent) {
+      const keys = Object.keys(response.structuredContent);
+      return (
+        keys.length === 1 && keys[0] === 'result'
+          ? response.structuredContent.result
+          : response.structuredContent
+      ) as Record<string, unknown>;
+    }
+    const text = response.content?.find((part) => part.type === 'text')?.text;
+    try {
+      return JSON.parse(text ?? '{}') as Record<string, unknown>;
+    } catch {
+      return { text };
+    }
+  }
+  /**
+   * Point the local tools at the tab the owner is viewing, so teaching and the
+   * saved-button list apply to the page on screen.
+   */
+  private async followViewedTab() {
+    const page = await this.require();
+    const { tabs } = (await this.tool('browser_tabs')) as {
+      tabs?: { index: number; url: string; active: boolean }[];
+    };
+    if (!tabs || tabs.find((tab) => tab.active)?.url === page.url()) return;
+    const match = tabs.find((tab) => tab.url === page.url());
+    if (match) await this.tool('browser_switch_tab', { index: match.index });
+  }
+  /** Start owner teaching: their next click in the view marks the target. */
+  async teachStart(name: string, kind: 'button' | 'region', afterClicks = 0) {
+    // Tab switching is refused while the owner has control; teach where it is.
+    await this.followViewedTab().catch(() => undefined);
+    return this.tool('browser_teach_start', {
+      name,
+      kind,
+      selection: kind === 'region' ? 'area' : 'click',
+      ...(afterClicks > 0 ? { after_clicks: afterClicks } : {}),
+    });
+  }
+  teachStatus() {
+    return this.tool('browser_teach_status');
+  }
+  teachFinish() {
+    return this.tool('browser_teach_finish');
+  }
+  teachCancel() {
+    return this.tool('browser_teach_cancel');
+  }
+  /** The latest pair scan the local tools saved (by the owner or a Dot). */
+  pairScan(
+    file = process.env.LOCALTOOLS_PAIR_SCAN_FILE ??
+      'localtools/output/pair-scan.json',
+  ): Record<string, unknown> {
+    try {
+      return JSON.parse(readFileSync(resolve(file), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      return {};
+    }
+  }
+  /** The trading session the local tools keep: start, peak and locked profit. */
+  tradingSession(
+    file = process.env.LOCALTOOLS_TRADING_SESSION_FILE ??
+      'localtools/output/trading-session.json',
+  ) {
+    return this.pairScan(file) as {
+      time?: number;
+      start?: number;
+      peak?: number;
+      locked?: number | null;
+    };
+  }
+  /** Rate the top pairs and leave the chart on the clearest trend. */
+  scanPairs(count = 8, market: 'otc' | 'real' | 'same' = 'same') {
+    return this.tool('browser_scan_pairs', {
+      count,
+      market,
+      ...(market === 'real' ? { expiry: '1m' } : {}),
+    });
+  }
+  /** Switch the trading tab to a pair, for the owner and the Dots alike. */
+  choosePair(name: string) {
+    return this.tool('browser_choose_asset', { name });
+  }
+  /** Buttons and areas the owner taught for the page on screen. */
+  async targets() {
+    if (!(await this.page())) return { targets: [] };
+    // Switching tabs is refused while the owner has control or a teach is open.
+    await this.followViewedTab().catch(() => undefined);
+    return this.tool('browser_targets');
+  }
+  async forgetTarget(id: string) {
+    await this.followViewedTab().catch(() => undefined);
+    return this.tool('browser_target_forget', { target_id: id });
+  }
+  /** Visible text of the page on screen, so code can read facts such as the balance. */
+  async pageText(): Promise<string | undefined> {
+    const page = await this.page();
+    if (!page) return undefined;
+    return page
+      .evaluate(() => document.body?.innerText ?? '')
+      .catch(() => undefined);
+  }
+  /** Names of taught targets on the current page, for a run's instructions. */
+  async targetNames(): Promise<string[]> {
+    if (!this.mcp || !(await this.page())) return [];
+    const { targets } = (await this.tool('browser_targets')) as {
+      targets?: { name?: string; kind?: string }[];
+    };
+    return (targets ?? [])
+      .filter((target) => target.name)
+      .map((target) =>
+        target.kind && target.kind !== 'button'
+          ? `${target.name} (${target.kind})`
+          : String(target.name),
+      );
   }
   async status() {
     const page = await this.page();

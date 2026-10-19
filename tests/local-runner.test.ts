@@ -62,3 +62,40 @@ it('keeps an interrupted turn and marks it interrupted after restart', async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it('deleting a conversation stops its running reply and removes its history for good', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'opendots-runner-'));
+  const path = join(dir, 'db.sqlite');
+  try {
+    const runner = new SqliteAgentRunner(path);
+    const agent = new StallingAgent({ agentId: 'dot' });
+    const input: RunAgentInput = {
+      threadId: 'thread-delete',
+      runId: 'run-1',
+      messages: [{ id: 'u1', role: 'user', content: 'Trade until 1k' }],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: {},
+    };
+    agent.setMessages(input.messages);
+    runner.run({ threadId: input.threadId, agent, input }).subscribe({
+      error: () => undefined,
+    });
+    await new Promise((done) => setTimeout(done, 50));
+    expect(await runner.isRunning({ threadId: 'thread-delete' })).toBe(true);
+    await runner.stop({ threadId: 'thread-delete' });
+    await new Promise((done) => setTimeout(done, 50));
+    runner.forget('thread-delete');
+    expect(await runner.isRunning({ threadId: 'thread-delete' })).toBe(false);
+    expect(runner.getThreadMessages('thread-delete')).toEqual([]);
+    runner.close();
+    // Nothing comes back after a restart.
+    const restarted = new SqliteAgentRunner(path);
+    expect(restarted.getThreadMessages('thread-delete')).toEqual([]);
+    restarted.clearThreads();
+    restarted.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

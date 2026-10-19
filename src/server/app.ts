@@ -1,5 +1,11 @@
 import { computerRoutes } from './computer-routes.js';
 import { browserRoutes } from './browser-routes.js';
+import { teamBoardRoutes } from './team-board-routes.js';
+import {
+  confirmationSchema,
+  readConfirmationPolicy,
+  writeConfirmationPolicy,
+} from './confirmation-policy.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { existsSync } from 'node:fs';
@@ -12,6 +18,24 @@ import type { Platform } from './platform.js';
 import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function matchesOrigin(actual: string, expected: string): boolean {
+  if (actual === expected) return true;
+  try {
+    const source = new URL(actual);
+    const target = new URL(expected);
+    return (
+      actual === source.origin &&
+      loopbackHosts.has(source.hostname) &&
+      loopbackHosts.has(target.hostname) &&
+      source.protocol === target.protocol &&
+      source.port === target.port
+    );
+  } catch {
+    return false;
+  }
+}
 export interface AppOptions {
   store: Store;
   runner: Runner;
@@ -38,10 +62,25 @@ export function createApp({
     maxSize: 28_500_000,
     onError: (c) => c.json({ error: 'Attachment is too large.' }, 413),
   });
+  // A chat sends its whole conversation with each message; a night of trading
+  // (400 tool results) passed 1 MB and every new message got a 413. The model
+  // still sees only the recent part (fitHistory).
+  const chatBodies = bodyLimit({
+    maxSize: 50_000_000,
+    onError: (c) =>
+      c.json(
+        {
+          error: 'This conversation is too long to continue; start a new chat.',
+        },
+        413,
+      ),
+  });
   app.use('/api/*', (c, next) =>
     c.req.path === '/api/uploads'
       ? uploadBodies(c, next)
-      : smallBodies(c, next),
+      : c.req.path.startsWith('/api/copilotkit')
+        ? chatBodies(c, next)
+        : smallBodies(c, next),
   );
   app.use('/api/*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
@@ -57,7 +96,7 @@ export function createApp({
       return c.json({ error: 'Unrecognized host.' }, 403);
     const requestOrigin = c.req.header('origin');
     const expectedOrigin = origin ?? new URL(c.req.url).origin;
-    if (requestOrigin && requestOrigin !== expectedOrigin)
+    if (requestOrigin && !matchesOrigin(requestOrigin, expectedOrigin))
       return c.json({ error: 'Cross-origin requests are not allowed.' }, 403);
     if (c.req.header('sec-fetch-site') === 'cross-site')
       return c.json({ error: 'Cross-site requests are not allowed.' }, 403);
@@ -84,6 +123,90 @@ export function createApp({
   });
   if (platform) app.route('/api', computerRoutes(platform.computers));
   if (platform) app.route('/api', browserRoutes(platform.browser));
+  if (platform) app.route('/api', teamBoardRoutes(platform.teamBoard));
+  // Send the owner's message to a running unattended task without stopping it;
+  // the task reads it after the tool step in progress.
+  app.post('/api/threads/:id/steer', async (c) => {
+    if (!platform)
+      return c.json({ error: 'Steering needs the local platform.' }, 503);
+    // The current run loop does not read messages sent mid-run; say so rather
+    // than accept a message that would never reach the task.
+    if (!platform.config.steering)
+      return c.json(
+        {
+          error:
+            'Sending a message to a running task is not available in this version. Press Stop, then send it as a new message.',
+        },
+        409,
+      );
+    const threadId = c.req.param('id');
+    const body = (await c.req.json().catch(() => null)) as {
+      text?: unknown;
+    } | null;
+    if (typeof body?.text !== 'string')
+      return c.json({ error: 'Enter a message for the running task.' }, 400);
+    const policy = platform.config.mcp?.localConfirmationConfig();
+    if (
+      !policy ||
+      readConfirmationPolicy(policy.path, policy.defaultConfirm).mode !==
+        'unattended'
+    )
+      return c.json(
+        {
+          error:
+            'Messages reach a running task only in unattended mode. Send this after the current reply finishes.',
+        },
+        409,
+      );
+    if (!(await platform.runner.isRunning({ threadId })))
+      return c.json(
+        {
+          error:
+            'Nothing is running in this conversation; send it as a normal message.',
+        },
+        409,
+      );
+    try {
+      return c.json(
+        { waiting: platform.steering.push(threadId, body.text) },
+        202,
+      );
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        400,
+      );
+    }
+  });
+  app.get('/api/confirmation-policy', (c) => {
+    const config = platform?.config.mcp?.localConfirmationConfig();
+    if (!config)
+      return c.json(
+        {
+          error:
+            'Live confirmation controls require the bundled local PC tools server.',
+        },
+        503,
+      );
+    return c.json(readConfirmationPolicy(config.path, config.defaultConfirm));
+  });
+  app.put('/api/confirmation-policy', async (c) => {
+    const config = platform?.config.mcp?.localConfirmationConfig();
+    if (!config)
+      return c.json(
+        {
+          error:
+            'Live confirmation controls require the bundled local PC tools server.',
+        },
+        503,
+      );
+    const parsed = confirmationSchema.safeParse(
+      await c.req.json().catch(() => null),
+    );
+    if (!parsed.success)
+      return c.json({ error: 'Choose confirm or unattended mode.' }, 400);
+    return c.json(writeConfirmationPolicy(config.path, parsed.data));
+  });
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   app.get('/api/state', (c) =>

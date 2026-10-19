@@ -111,12 +111,11 @@ export function ChangesPanel() {
             <button
               type="button"
               className="primary"
-              disabled={busy}
+              disabled={busy || !review.passed}
               onClick={() => {
                 if (
-                  review.passed ||
                   window.confirm(
-                    'Checks failed for this change. Apply it anyway?',
+                    'Apply this code change to OpenDots? A restart is required to load it.',
                   )
                 )
                   void act(review.id, 'apply');

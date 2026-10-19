@@ -4204,3 +4204,108 @@ h3 {
   color: #9b2c1f;
   background: #fde8e6;
 }
+
+/* Owner teaching and saved buttons under the live browser view. */
+.browser-teach {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 13px;
+}
+.browser-teach form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.browser-teach input {
+  min-width: 140px;
+}
+.browser-taught {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.browser-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+}
+.browser-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.browser-teach-after {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.browser-teach .browser-teach-after input {
+  min-width: 0;
+}
+.thread-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.thread-row > .nav-item {
+  flex: 1;
+  min-width: 0;
+}
+.thread-delete {
+  opacity: 0.45;
+}
+.thread-row:hover .thread-delete,
+.thread-delete:focus-visible {
+  opacity: 1;
+}
+.thread-running {
+  color: #16a34a;
+}
+
+/* Pairs dashboard under the live view (Pocket Option). */
+.pairs-dashboard {
+  padding: 4px 2px 8px;
+  font-size: 13px;
+}
+.pairs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.pairs-dashboard table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.pairs-dashboard th,
+.pairs-dashboard td {
+  text-align: left;
+  padding: 2px 6px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+  white-space: nowrap;
+}
+.pairs-dashboard tr.up td:nth-child(3) {
+  color: #1a8f4a;
+}
+.pairs-dashboard tr.down td:nth-child(3) {
+  color: #c0392b;
+}
+.pairs-dashboard tr.current {
+  background: rgba(127, 127, 127, 0.12);
+  font-weight: 600;
+}
+.pairs-candles {
+  font-family: ui-monospace, monospace;
+  letter-spacing: 1px;
+}

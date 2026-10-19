@@ -21,6 +21,38 @@ export function closeInterrupted(events: BaseEvent[]): BaseEvent[] {
     } as BaseEvent,
   ];
 }
+/**
+ * Streamed pieces of one message joined into one event: a long trading run
+ * stored ~64,000 events (one per word), and replaying them on reopening the
+ * chat froze the page. The joined events give the same messages.
+ */
+export function compactEvents(events: BaseEvent[]): BaseEvent[] {
+  const joinable = new Set([
+    'TEXT_MESSAGE_CONTENT',
+    'REASONING_MESSAGE_CONTENT',
+    'TOOL_CALL_ARGS',
+  ]);
+  const out: BaseEvent[] = [];
+  for (const event of events) {
+    const piece = event as BaseEvent & {
+      delta?: string;
+      messageId?: string;
+      toolCallId?: string;
+    };
+    const last = out.at(-1) as typeof piece | undefined;
+    if (
+      joinable.has(event.type) &&
+      last?.type === event.type &&
+      last.messageId === piece.messageId &&
+      last.toolCallId === piece.toolCallId &&
+      typeof last.delta === 'string' &&
+      typeof piece.delta === 'string'
+    )
+      out[out.length - 1] = { ...last, delta: last.delta + piece.delta };
+    else out.push(event);
+  }
+  return out;
+}
 // Durable local conversations: the SDK's in-memory runner handles streaming,
 // replay, and stop semantics; each finished run is mirrored into SQLite and
 // rehydrated on startup, so no conversation data leaves this machine.
@@ -60,7 +92,9 @@ export class SqliteAgentRunner extends InMemoryAgentRunner {
           runId: row.runId,
           agentId: row.agentId,
           parentRunId: row.parentRunId,
-          events: closeInterrupted(JSON.parse(row.events) as BaseEvent[]),
+          events: closeInterrupted(
+            compactEvents(JSON.parse(row.events) as BaseEvent[]),
+          ),
           // appendRun keeps the latest non-empty snapshot at thread level.
           messages:
             index === rows.length - 1
@@ -100,6 +134,18 @@ export class SqliteAgentRunner extends InMemoryAgentRunner {
   close() {
     this.db.close();
   }
+  /** Drop a conversation's saved and in-memory history (stop its run first). */
+  forget(threadId: string) {
+    this.db.prepare('DELETE FROM local_runs WHERE threadId = ?').run(threadId);
+    this.db.prepare('DELETE FROM local_threads WHERE id = ?').run(threadId);
+    const store = memory.peek(threadId);
+    if (store)
+      (
+        memory as unknown as {
+          removeThread(id: string, value: typeof store): void;
+        }
+      ).removeThread(threadId, store);
+  }
   /** Interim save of an in-flight run; the final persist replaces it. */
   private checkpoint(request: AgentRunnerRunRequest, events: BaseEvent[]) {
     const now = Date.now();
@@ -133,6 +179,8 @@ export class SqliteAgentRunner extends InMemoryAgentRunner {
     const store = memory.peek(threadId);
     const run = store?.historicRuns.find((item) => item.runId === runId);
     if (!store || !run) return;
+    // Keep the joined events for replay too, not only on disk.
+    (run as { events: BaseEvent[] }).events = compactEvents(run.events);
     const now = Date.now();
     this.db
       .prepare(

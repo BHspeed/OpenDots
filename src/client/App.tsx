@@ -417,6 +417,29 @@ export function App() {
               setMobile(false);
             }}
             onNew={() => void newConversation()}
+            onDelete={(id) => {
+              const conversation = workspace.conversations.find(
+                (item) => item.id === id,
+              );
+              if (
+                !window.confirm(
+                  `Delete "${conversation?.title ?? 'this chat'}"? Anything it is still running is stopped, and its messages are removed.`,
+                )
+              )
+                return;
+              void api(`/conversations/${id}`, 'DELETE', {})
+                .then(async () => {
+                  if (selectedThread === id) setSelectedThread(undefined);
+                  await refresh();
+                })
+                .catch((e: unknown) =>
+                  setError(
+                    e instanceof Error
+                      ? e.message
+                      : 'Could not delete the chat.',
+                  ),
+                );
+            }}
           />
         ) : (
           <div className="sidebar-empty">

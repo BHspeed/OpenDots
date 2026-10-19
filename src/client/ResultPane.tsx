@@ -15,6 +15,7 @@ import { Mascot } from './Mascot';
 import { ComputerPanel } from './ComputerPanel';
 import { BrowserPanel } from './BrowserPanel';
 import { ChangesPanel } from './ChangesPanel';
+import { TeamBoardPanel } from './TeamBoardPanel';
 export function ResultPane({
   latest,
   status,
@@ -31,7 +32,7 @@ export function ResultPane({
   onClose: () => void;
 }) {
   const [resultTab, setResultTab] = useState<
-    'Brief' | 'Computer' | 'Browser' | 'Changes'
+    'Brief' | 'Computer' | 'Browser' | 'Changes' | 'Team'
   >('Browser');
   const [computerDotId, setComputerDotId] = useState(defaultDotId);
   const computerDot =
@@ -42,6 +43,12 @@ export function ResultPane({
     <aside className="result-pane">
       <div className="pane-header">
         <div className="pane-tabs">
+          <button
+            className={resultTab === 'Team' ? 'selected' : ''}
+            onClick={() => setResultTab('Team')}
+          >
+            Team
+          </button>
           <button
             className={resultTab === 'Brief' ? 'selected' : ''}
             onClick={() => setResultTab('Brief')}
@@ -76,7 +83,9 @@ export function ResultPane({
           <X size={16} />
         </button>
       </div>
-      {resultTab === 'Browser' ? (
+      {resultTab === 'Team' ? (
+        <TeamBoardPanel dots={dots} onReview={() => setResultTab('Changes')} />
+      ) : resultTab === 'Browser' ? (
         <BrowserPanel />
       ) : resultTab === 'Changes' ? (
         <ChangesPanel />

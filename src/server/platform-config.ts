@@ -1,8 +1,10 @@
 import type { WebConfig } from './parallel.js';
+import type { SteeringInbox } from './steering.js';
 import type { McpTools } from './mcp-tools.js';
 import type { ModelRegistry } from './models.js';
 import type { MemoryIndex } from './memory-index.js';
 import type { SkillStore } from './skills.js';
+import type { TeamBoardService } from './team-board.js';
 import type { DevWorkspace } from './dev-workspace.js';
 import type { Dot } from '../shared/types.js';
 export type Delegate = (request: {
@@ -40,11 +42,27 @@ export interface PlatformConfig extends WebConfig {
   models?: ModelRegistry;
   memory?: MemoryIndex;
   skills?: SkillStore;
+  teamBoard?: TeamBoardService;
   dev?: DevWorkspace;
   delegate?: Delegate;
+  /** Owner messages for running unattended tasks, by conversation. */
+  steering?: SteeringInbox;
+  /** Names of the owner-taught buttons on the shared browser's current page. */
+  browserTargets?: () => Promise<string[]>;
+  /** Visible text of the shared browser's current page. */
+  browserText?: () => Promise<string | undefined>;
+  /** The trading session's start, peak and locked (trailing-stop) balance. */
+  tradingSession?: () => {
+    time?: number;
+    start?: number;
+    peak?: number;
+    locked?: number | null;
+  };
   /** Current page of the shared browser, if it is running. */
   browserPage?: () => Promise<{ url: string; title: string } | undefined>;
   runTimeoutMs?: number;
+  /** Maximum model/tool cycles in one turn; exhaustion is an explicit error. */
+  maxAgentIterations?: number;
   maxOutputTokens?: number;
   /** Model context size (OLLAMA_CONTEXT_LENGTH) and tokens kept free for instructions, tools and the answer. */
   contextTokens?: number;

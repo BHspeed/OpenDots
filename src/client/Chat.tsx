@@ -1,4 +1,5 @@
 import { PageReviewCard } from './PageReviewCard';
+import { executionReceipt as summarizeExecution } from '../shared/execution-receipt';
 import { pageReviewSchema, pageReviewTool } from '../shared/page-review';
 import { contextualMessage, type PageContext } from './page-context';
 import { api } from './api';
@@ -126,17 +127,51 @@ export function Chat({
     }
   };
   const [error, setError] = useState('');
+  const [turnError, setTurnError] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [connectAttempt, setConnectAttempt] = useState(0);
   const [running, setRunning] = useState(false);
+  const [executionReceipt, setExecutionReceipt] = useState('');
+  // Status of messages sent to a task while it runs (see steer below).
+  const [steerNote, setSteerNote] = useState('');
   const voice = useVoice(thread.id, onSaved, agent.messages.at(-1)?.id);
   const sent = useRef(false);
   const bottom = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!/network|fetch|connection/i.test(error) || connectAttempt >= 3) return;
+    // Reattach to the persisted run; never resubmit a prompt or replay actions.
+    const timer = setTimeout(
+      () => setConnectAttempt((value) => value + 1),
+      1000 * 2 ** connectAttempt,
+    );
+    return () => clearTimeout(timer);
+  }, [error, connectAttempt]);
   useEffect(() => {
     const subscription = copilotkit.subscribe({
       onError: ({ error }) => setError(error.message),
     });
     const events = agent.subscribe({
-      onRunErrorEvent: ({ event }) => setError(event.message),
+      onMessagesSnapshotEvent: () => setLoaded(true),
+      onRunStartedEvent: () => {
+        setLoaded(true);
+        setRunning(true);
+        setError('');
+        setTurnError(false);
+      },
+      onRunFinishedEvent: () => {
+        setRunning(false);
+        setSteerNote('');
+      },
+      // A steered message lands in the transcript as the owner's message.
+      onTextMessageStartEvent: ({ event }) => {
+        if (event.role === 'user') setSteerNote('');
+      },
+      onRunErrorEvent: ({ event }) => {
+        setRunning(false);
+        setSteerNote('');
+        setTurnError(true);
+        setError(event.message);
+      },
     });
     return () => {
       subscription.unsubscribe();
@@ -149,7 +184,12 @@ export function Chat({
     void copilotkit
       .connectAgent({ agent })
       .then(() => {
-        if (active) setLoaded(true);
+        if (active) {
+          setLoaded(true);
+          setError((current) =>
+            /network|fetch|connection/i.test(current) ? '' : current,
+          );
+        }
       })
       .catch((e) => {
         if (active)
@@ -160,17 +200,47 @@ export function Chat({
     return () => {
       active = false;
     };
-  }, [agent, copilotkit, isReady]);
+  }, [agent, copilotkit, isReady, connectAttempt]);
+  // While a task runs, a message goes to that task instead of being dropped;
+  // the task reads it after its current tool step and keeps going.
+  const steer = async (text: string) => {
+    try {
+      const { waiting } = await api<{ waiting: number }>(
+        `/threads/${encodeURIComponent(thread.id)}/steer`,
+        'POST',
+        { text },
+      );
+      setDraft('');
+      setAttachments([]);
+      setSource('');
+      setSourceOpen(false);
+      setSteerNote(
+        waiting > 1
+          ? `${waiting} messages sent to the running task. It reads them after its current step.`
+          : 'Sent to the running task. It reads it after its current step.',
+      );
+    } catch (e) {
+      setSteerNote(
+        e instanceof Error ? e.message : 'Could not reach the running task.',
+      );
+    }
+  };
   const send = async (typed: string) => {
     const text = attachments.length
       ? `${typed.trim() || 'Please look at the attached file(s).'}\n\nAttached files (open them with your tools):\n${attachments
           .map((file) => `- ${file.name}: ${file.path}`)
           .join('\n')}`
       : typed;
+    if (running && loaded && !paused && text.trim()) {
+      await steer(text);
+      return;
+    }
     if (!text.trim() || running || !loaded || !contextReady || paused) return;
     setAttachments([]);
     setError('');
+    setTurnError(false);
     setRunning(true);
+    setExecutionReceipt('');
     agent.addMessage({
       id: crypto.randomUUID(),
       role: 'user',
@@ -181,6 +251,7 @@ export function Chat({
     setSourceOpen(false);
     try {
       const result = await copilotkit.runAgent({ agent });
+      setExecutionReceipt(summarizeExecution(result.newMessages));
       if (!result.newMessages.some((message) => message.role === 'assistant'))
         throw new Error(
           'The current turn returned no response. Check the runtime connection and retry.',
@@ -378,6 +449,11 @@ export function Chat({
             <span>{dot.name} is thinking</span>
           </div>
         )}
+        {!running && executionReceipt && (
+          <p role="status" className="muted">
+            {executionReceipt}
+          </p>
+        )}
         <div ref={bottom} />
       </div>
       {contextError && (
@@ -391,10 +467,11 @@ export function Chat({
       {(error || voice.error) && (
         <div className="chat-error" role="alert">
           {error || voice.error}
-          {error && (
+          {error && (!turnError || /network|fetch|connection/i.test(error)) && (
             <button
               onClick={() => {
                 setError('');
+                setTurnError(false);
                 void copilotkit
                   .connectAgent({ agent })
                   .then(() => setLoaded(true))
@@ -512,7 +589,7 @@ export function Chat({
               }
             }}
           />
-          {running ? (
+          {running && (
             <button
               type="button"
               className="send-button"
@@ -521,15 +598,21 @@ export function Chat({
             >
               <Square size={16} />
             </button>
-          ) : (
+          )}
+          {(!running || draft.trim() || attachments.length > 0) && (
             <button
               className="send-button"
-              aria-label="Send message"
+              aria-label={running ? 'Send to the running task' : 'Send message'}
+              title={
+                running
+                  ? 'The task reads this after its current step and keeps going'
+                  : undefined
+              }
               disabled={
                 (!draft.trim() && !attachments.length) ||
                 uploading ||
                 !loaded ||
-                !contextReady ||
+                (!running && !contextReady) ||
                 paused
               }
             >
@@ -537,6 +620,11 @@ export function Chat({
             </button>
           )}
         </div>
+        {steerNote && (
+          <div className="chat-compose-note" role="status">
+            {steerNote}
+          </div>
+        )}
         <div className="chat-compose-note">
           {voiceReady
             ? 'Text and voice, one conversation.'

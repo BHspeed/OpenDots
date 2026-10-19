@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { DotLearning } from './DotLearning';
+import { ConfirmationControl } from './ConfirmationControl';
 import type { Dot, Memory, State, WorkspaceState } from '../shared/types';
 import {
   allToolGroups,
@@ -560,6 +561,7 @@ export function WorkspaceDialog({
               </p>
             </>
           )}
+          {dialog.type === 'settings' && <ConfirmationControl />}
           {dialog.type === 'settings' && (
             <div className="config-note">
               <strong>Service setup</strong>

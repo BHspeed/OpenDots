@@ -23,6 +23,7 @@ export async function runLocalTurn(
   prompt: string,
   signal: AbortSignal,
   metadata?: Record<string, unknown>,
+  onCompleted?: (messages: Message[]) => void,
 ): Promise<string> {
   signal.throwIfAborted();
   const history = runner.getThreadMessages(threadId);
@@ -53,6 +54,7 @@ export async function runLocalTurn(
       signal.removeEventListener('abort', stop);
       try {
         signal.throwIfAborted();
+        onCompleted?.(agent.messages.filter((item) => !known.has(item.id)));
         resolve(
           currentTurnText(
             agent.messages.filter((item) => !known.has(item.id)),

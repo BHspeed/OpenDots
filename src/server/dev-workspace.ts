@@ -12,7 +12,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 // The Developer Dot edits OpenDots' own code in a separate git worktree on its
@@ -28,6 +36,7 @@ export interface DevReview {
   passed: boolean;
   status: 'pending' | 'applied' | 'rejected';
   createdAt: number;
+  sourceThreadId?: string | null;
 }
 
 /** Files that govern permissions and approvals: the Developer may not edit them. */
@@ -53,7 +62,7 @@ function run(
   args: string[],
   cwd: string,
   timeout = 300_000,
-): Promise<{ code: number; output: string }> {
+): Promise<{ code: number; output: string; stdout: string }> {
   return new Promise((done) => {
     execFile(
       command,
@@ -62,15 +71,14 @@ function run(
         cwd,
         timeout,
         maxBuffer: 20_000_000,
-        // npx is a .cmd script on Windows and needs the shell; git must not use
-        // it, or arguments with spaces (commit messages) are split apart.
-        shell: process.platform === 'win32' && command === 'npx',
+        shell: false,
         windowsHide: true,
       },
       (error, stdout, stderr) =>
         done({
           code: error ? Number((error as { code?: number }).code ?? 1) || 1 : 0,
           output: `${stdout}${stderr}`,
+          stdout,
         }),
     );
   });
@@ -80,6 +88,8 @@ export class DevWorkspace {
   private db: DatabaseSync;
   readonly worktree: string;
   private branch?: string;
+  private session?: string;
+  private busy = false;
   private lastChecks = { text: 'Checks have not been run yet.', passed: false };
   constructor(
     readonly repo: string,
@@ -92,25 +102,94 @@ export class DevWorkspace {
     this.db = new DatabaseSync(databasePath);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS dev_reviews(id TEXT PRIMARY KEY, branch TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, diff TEXT NOT NULL, checks TEXT NOT NULL, passed INTEGER NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL);`);
+    if (
+      !this.db
+        .prepare('PRAGMA table_info(dev_reviews)')
+        .all()
+        .some((row) => row.name === 'sourceThreadId')
+    )
+      this.db.exec('ALTER TABLE dev_reviews ADD COLUMN sourceThreadId TEXT');
+    this.db.exec(
+      'CREATE TABLE IF NOT EXISTS dev_session(id INTEGER PRIMARY KEY CHECK(id = 1), branch TEXT NOT NULL, owner TEXT)',
+    );
+    const saved = this.db
+      .prepare('SELECT branch, owner FROM dev_session WHERE id = 1')
+      .get();
+    if (saved) {
+      this.branch = String(saved.branch);
+      this.session = saved.owner ? String(saved.owner) : undefined;
+    }
+  }
+  /** One conversation owns unfinished work, including across server restarts. */
+  async withSession<T>(
+    threadId: string,
+    work: () => T | Promise<T>,
+  ): Promise<T> {
+    if (this.busy)
+      throw new Error(
+        'The Developer workspace is busy. Retry after the current operation finishes.',
+      );
+    if (this.branch && this.session !== threadId)
+      throw new Error(
+        'Another conversation owns the unfinished code change. Continue or discard it from that conversation first.',
+      );
+    this.busy = true;
+    this.session = threadId;
+    try {
+      return await work();
+    } finally {
+      if (!this.branch) this.session = undefined;
+      this.busy = false;
+    }
+  }
+  status() {
+    return {
+      active: !!this.branch,
+      branch: this.branch ?? null,
+      sourceThreadId: this.session ?? null,
+      busy: this.busy,
+      checks: this.lastChecks,
+    };
+  }
+  close() {
+    this.db.close();
   }
   private git(args: string[], cwd = this.repo) {
     return run('git', args, cwd);
   }
   /** Resolves a repo-relative path inside the worktree; refuses protected or escaping paths. */
   private path(file: string, forWrite = false) {
+    if (isAbsolute(file))
+      throw new Error(
+        'Path is outside the OpenDots code. Use a relative path.',
+      );
     const rel = normalize(file.replace(/^[/\\]+/, '')).replaceAll('\\', '/');
     const full = resolve(this.worktree, rel);
-    if (relative(this.worktree, full).startsWith('..'))
+    const within = relative(this.worktree, full);
+    if (within.startsWith('..') || isAbsolute(within))
       throw new Error('Path is outside the OpenDots code.');
+    const compared = rel.toLowerCase();
     if (
       forWrite &&
       protectedPaths.some(
-        (p) => rel === p || rel.startsWith(p.endsWith('/') ? p : `${p}/`),
+        (p) =>
+          compared === p.toLowerCase() ||
+          compared.startsWith(
+            p.toLowerCase().endsWith('/')
+              ? p.toLowerCase()
+              : `${p.toLowerCase()}/`,
+          ),
       )
     )
       throw new Error(
         `${rel} is protected (permissions, approvals, tools or secrets). The Developer cannot change it; describe the change for the owner instead.`,
       );
+    let ancestor = full;
+    while (ancestor !== this.worktree) {
+      if (existsSync(ancestor) && lstatSync(ancestor).isSymbolicLink())
+        throw new Error('Linked paths are outside the editable OpenDots code.');
+      ancestor = dirname(ancestor);
+    }
     return { rel, full };
   }
   private requireActive() {
@@ -139,16 +218,37 @@ export class DevWorkspace {
       throw new Error(
         'Refusing to remove the dev workspace: its node_modules is not a link.',
       );
-    await this.git(['worktree', 'remove', '--force', this.worktree]);
+    const removed = await this.git([
+      'worktree',
+      'remove',
+      '--force',
+      this.worktree,
+    ]);
+    if (removed.code)
+      throw new Error(
+        `Could not remove the Developer worktree: ${removed.output.slice(0, 500)}`,
+      );
     await this.git(['worktree', 'prune']);
   }
   /** Fresh branch + worktree from the current code. */
   async start(title: string) {
+    if (this.branch || existsSync(this.worktree))
+      throw new Error(
+        'An unfinished Developer workspace already exists. Continue it or explicitly discard it before starting another change.',
+      );
+    const dirty = await this.git(['status', '--porcelain']);
+    if (dirty.code)
+      throw new Error(
+        `Cannot inspect the repository: ${dirty.output.slice(0, 500)}`,
+      );
+    if (dirty.stdout.trim())
+      throw new Error(
+        'OpenDots has uncommitted changes. Ask the owner to commit a checkpoint first so the Developer works from the current code without losing existing work.',
+      );
     const head = (
       await this.git(['rev-parse', '--abbrev-ref', 'HEAD'])
-    ).output.trim();
-    if (existsSync(this.worktree)) await this.discard();
-    const branch = `dev/${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}-${title
+    ).stdout.trim();
+    const branch = `dev/${randomUUID().slice(0, 8)}-${title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .slice(0, 30)}`;
@@ -164,11 +264,15 @@ export class DevWorkspace {
       throw new Error(
         `Could not create the dev workspace: ${added.output.slice(0, 500)}`,
       );
-    // Share installed packages instead of reinstalling (a junction needs no admin rights).
+    this.branch = branch;
+    this.db
+      .prepare('INSERT OR REPLACE INTO dev_session VALUES (1, ?, ?)')
+      .run(branch, this.session ?? null);
+    // Persist ownership before linking dependencies, so a failed link can be
+    // recovered by the same conversation instead of orphaning the worktree.
     const modules = join(this.worktree, 'node_modules');
     if (!existsSync(modules))
       symlinkSync(join(this.repo, 'node_modules'), modules, 'junction');
-    this.branch = branch;
     this.lastChecks = { text: 'Checks have not been run yet.', passed: false };
     return { branch, based_on: head, workspace: this.worktree };
   }
@@ -176,6 +280,7 @@ export class DevWorkspace {
     await this.removeWorktree();
     if (this.branch) await this.git(['branch', '-D', this.branch]);
     this.branch = undefined;
+    this.db.exec('DELETE FROM dev_session');
   }
   list(dir = '.') {
     this.requireActive();
@@ -226,6 +331,10 @@ export class DevWorkspace {
     const { full, rel } = this.path(file, true);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, content);
+    this.lastChecks = {
+      text: 'Code changed; checks must be run again.',
+      passed: false,
+    };
     return { written: rel, chars: content.length };
   }
   /** Exact text replacement (safer than rewriting whole files). */
@@ -243,20 +352,28 @@ export class DevWorkspace {
         `The text appears ${count} times in ${rel}; include more surrounding lines so it is unique.`,
       );
     writeFileSync(full, text.replace(find, replace));
+    this.lastChecks = {
+      text: 'Code changed; checks must be run again.',
+      passed: false,
+    };
     return { edited: rel };
   }
   /** Type-check, lint and the full test suite, summarised for the model. */
   async checks() {
     this.requireActive();
     const steps: [string, string[]][] = [
-      ['Type-check', ['tsc', '--noEmit']],
-      ['Lint', ['eslint', 'src', 'tests']],
-      ['Tests', ['vitest', 'run', '--reporter=dot']],
+      ['Type-check', ['typescript/bin/tsc', '--noEmit']],
+      ['Lint', ['eslint/bin/eslint.js', 'src', 'tests']],
+      ['Tests', ['vitest/vitest.mjs', 'run', '--reporter=dot']],
     ];
     const parts: string[] = [];
     let passed = true;
     for (const [name, args] of steps) {
-      const result = await run('npx', args, this.worktree);
+      const result = await run(
+        process.execPath,
+        [join(this.worktree, 'node_modules', args[0]), ...args.slice(1)],
+        this.worktree,
+      );
       const tail = result.output
         // Strip ANSI colour codes from tool output.
         .replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '')
@@ -283,6 +400,10 @@ export class DevWorkspace {
   async submit(title: string, summary: string): Promise<DevReview> {
     this.requireActive();
     const checks = await this.checks();
+    if (!checks.passed)
+      throw new Error(
+        `Checks failed. Fix the failures before submitting.\n${checks.text}`,
+      );
     const diff = await this.diff();
     if (!diff.trim()) throw new Error('There are no changes to submit.');
     const commit = await this.git(
@@ -310,9 +431,10 @@ export class DevWorkspace {
       passed: checks.passed,
       status: 'pending',
       createdAt: Date.now(),
+      sourceThreadId: this.session ?? null,
     };
     this.db
-      .prepare('INSERT INTO dev_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare('INSERT INTO dev_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(
         review.id,
         review.branch,
@@ -323,10 +445,12 @@ export class DevWorkspace {
         +review.passed,
         review.status,
         review.createdAt,
+        review.sourceThreadId ?? null,
       );
     // The branch keeps the work; free the worktree for the next change.
     await this.removeWorktree();
     this.branch = undefined;
+    this.db.exec('DELETE FROM dev_session');
     return review;
   }
   reviews(): DevReview[] {
@@ -345,6 +469,13 @@ export class DevWorkspace {
   /** Merge an approved branch into the current branch of the main checkout. */
   async apply(id: string) {
     const review = this.review(id);
+    if (!review.passed)
+      throw new Error('This change failed validation and cannot be applied.');
+    const dirty = await this.git(['status', '--porcelain']);
+    if (dirty.code || dirty.stdout.trim())
+      throw new Error(
+        'Commit or stash existing local changes before applying a Developer change.',
+      );
     const merged = await this.git([
       '-c',
       'user.name=OpenDots Developer',

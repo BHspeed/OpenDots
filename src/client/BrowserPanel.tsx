@@ -8,6 +8,7 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { api, authHeaders } from './api';
+import { PairsDashboard } from './PairsDashboard';
 
 interface Frame {
   data: string;
@@ -15,6 +16,11 @@ interface Frame {
   width: number;
   height: number;
   takeover: boolean;
+}
+interface Taught {
+  id: string;
+  name: string;
+  kind?: string;
 }
 interface Status {
   running: boolean;
@@ -50,7 +56,23 @@ export function BrowserPanel() {
   const [signInOpen, setSignInOpen] = useState(false);
   const [error, setError] = useState('');
   const wheel = useRef(0);
-  const takeover = frame?.takeover ?? status?.takeover ?? false;
+  // The status is refreshed after every action; a still page sends no new
+  // frames, so the last frame's copy can be stale after a takeover change.
+  const takeover = status?.takeover ?? frame?.takeover ?? false;
+  // Owner teaching: name a button, click it in the view, confirm it in the page.
+  const [teachOpen, setTeachOpen] = useState(false);
+  const [teachName, setTeachName] = useState('');
+  const [teachKind, setTeachKind] = useState<'button' | 'region'>('button');
+  // For buttons that only appear after another click (Double Up after BUY).
+  const [teachAfter, setTeachAfter] = useState(false);
+  const [teaching, setTeaching] = useState<{
+    name: string;
+    tookControl: boolean;
+    after?: boolean;
+  }>();
+  const [teachStep, setTeachStep] = useState('');
+  const [taught, setTaught] = useState<Taught[]>([]);
+  const finishing = useRef(false);
 
   const refresh = () =>
     api<Status>('/browser/status')
@@ -64,6 +86,95 @@ export function BrowserPanel() {
   useEffect(() => {
     if (!editing && frame?.url) setAddress(frame.url);
   }, [frame?.url, editing]);
+  const loadTaught = () =>
+    api<{ targets?: Taught[] }>('/browser/targets')
+      .then((result) => setTaught(result.targets ?? []))
+      .catch(() => setTaught([]));
+  useEffect(() => {
+    if (status?.running && !teaching) void loadTaught();
+    // Reload when the page on screen changes.
+  }, [status?.running, frame?.url, teaching]);
+  const endTeaching = async (message: string) => {
+    const tookControl = teaching?.tookControl;
+    setTeaching(undefined);
+    setTeachStep(message);
+    if (tookControl)
+      await api('/browser/takeover', 'POST', { on: false }).catch(
+        () => undefined,
+      );
+    await refresh();
+  };
+  // Follow the in-page teaching steps and save once the owner confirms.
+  useEffect(() => {
+    if (!teaching) return;
+    const timer = setInterval(() => {
+      void (async () => {
+        const state = await api<{
+          status?: string;
+          captured_label?: string;
+          clicks_to_let_through?: number;
+        }>('/browser/teach').catch(() => undefined);
+        if (!state || finishing.current) return;
+        if (state.status === 'waiting_for_owner' && teaching.after)
+          setTeachStep(
+            state.clicks_to_let_through
+              ? `Click the button that makes "${teaching.name}" appear (for example BUY); that click goes through as normal.`
+              : `Now click "${teaching.name}" quickly to mark it (it is not pressed), then click "Confirm taught target" in the page.`,
+          );
+        else if (state.status === 'marked_not_confirmed')
+          setTeachStep(
+            `Marked${state.captured_label ? ` "${state.captured_label}"` : ''}. Now click "Confirm taught target" in the page to save it as "${teaching.name}".`,
+          );
+        else if (state.status === 'confirmed_not_saved') {
+          finishing.current = true;
+          try {
+            await api('/browser/teach/finish', 'POST', {});
+            await endTeaching(
+              `Saved "${teaching.name}". Your Dots will use it by name on this page.`,
+            );
+          } catch (e) {
+            await endTeaching(
+              e instanceof Error ? e.message : 'Saving the button failed.',
+            );
+          } finally {
+            finishing.current = false;
+          }
+        } else if (
+          state.status === 'cancelled_or_expired' ||
+          state.status === 'not_started'
+        )
+          await endTeaching(
+            'Teaching was cancelled, timed out (2 minutes) or the page changed. Nothing was saved.',
+          );
+      })();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [teaching]);
+  const startTeaching = () =>
+    void run(async () => {
+      const name = teachName.trim();
+      if (!name) return;
+      const after = teachKind === 'button' && teachAfter;
+      await api('/browser/teach', 'POST', {
+        name,
+        kind: teachKind,
+        afterClicks: after ? 1 : 0,
+      });
+      // The owner's clicks reach the page only while they have control.
+      const tookControl = !takeover;
+      if (tookControl) await api('/browser/takeover', 'POST', { on: true });
+      setTeaching({ name, tookControl, after });
+      setTeachAfter(false);
+      setTeachOpen(false);
+      setTeachName('');
+      setTeachStep(
+        after
+          ? `Click the button that makes "${name}" appear (for example BUY); that click goes through as normal. Then click "${name}" quickly to mark it.`
+          : teachKind === 'region'
+            ? `Drag a box around "${name}" in the view below, then click "Confirm taught target" in the page.`
+            : `Click "${name}" in the view below to mark it (it is not pressed), then click "Confirm taught target" in the page.`,
+      );
+    });
 
   // Frames arrive as server-sent events over fetch (so auth headers apply).
   useEffect(() => {
@@ -303,6 +414,121 @@ export function BrowserPanel() {
             : 'Dots are in control. Watching live.'}
         </span>
       </div>
+      <div className="browser-teach">
+        {teaching ? (
+          <>
+            <span role="status">{teachStep}</span>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() =>
+                void run(async () => {
+                  await api('/browser/teach/cancel', 'POST', {}).catch(
+                    () => undefined,
+                  );
+                  await endTeaching('Teaching cancelled. Nothing was saved.');
+                })
+              }
+            >
+              Cancel
+            </button>
+          </>
+        ) : teachOpen ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              startTeaching();
+            }}
+          >
+            <input
+              aria-label="Name of the button to teach"
+              placeholder="Name, e.g. BUY"
+              maxLength={160}
+              value={teachName}
+              onChange={(e) => setTeachName(e.target.value)}
+            />
+            <select
+              aria-label="What to teach"
+              value={teachKind}
+              onChange={(e) =>
+                setTeachKind(e.target.value as 'button' | 'region')
+              }
+            >
+              <option value="button">Button</option>
+              <option value="region">Chart area</option>
+            </select>
+            {teachKind === 'button' && (
+              <label className="browser-teach-after">
+                <input
+                  type="checkbox"
+                  checked={teachAfter}
+                  onChange={(e) => setTeachAfter(e.target.checked)}
+                />
+                Appears after another click
+              </label>
+            )}
+            <button className="primary" disabled={busy || !teachName.trim()}>
+              Start
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setTeachOpen(false)}
+            >
+              Close
+            </button>
+          </form>
+        ) : (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => {
+              setTeachOpen(true);
+              setTeachStep('');
+            }}
+          >
+            Teach a button
+          </button>
+        )}
+        {!teaching && teachStep && (
+          <span className="muted" role="status">
+            {teachStep}
+          </span>
+        )}
+        {taught.length > 0 && (
+          <span className="browser-taught">
+            Saved here:
+            {taught.map((target) => (
+              <span key={target.id} className="browser-chip">
+                {target.name}
+                {target.kind && target.kind !== 'button'
+                  ? ` (${target.kind === 'region' ? 'area' : target.kind})`
+                  : ''}
+                <button
+                  type="button"
+                  aria-label={`Forget ${target.name}`}
+                  disabled={busy || !!teaching}
+                  onClick={() =>
+                    void run(async () => {
+                      await api(
+                        `/browser/targets/${encodeURIComponent(target.id)}/forget`,
+                        'POST',
+                        {},
+                      );
+                      await loadTaught();
+                    })
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </span>
+        )}
+      </div>
+      {/pocketoption\.com/.test(frame?.url ?? status?.url ?? '') && (
+        <PairsDashboard onError={setError} />
+      )}
       {signIn}
       {error && <p className="chat-error">{error}</p>}
     </div>
